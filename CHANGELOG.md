@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+### Fixed
+- Fix race condition that could lead to use-after-free if the `Receiver` was polled asynchronously,
+  but then dropped before completion. https://github.com/faern/oneshot/pull/74
 
 
 ## [0.1.11] - 2025-02-22

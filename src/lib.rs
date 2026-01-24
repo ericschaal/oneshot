@@ -1114,6 +1114,21 @@ impl<T> Drop for Receiver<T> {
         // that signal to the sender to deallocate the channel. So the channel pointer is valid
         let channel = unsafe { self.channel_ptr.as_ref() };
 
+        // If this receiver was previously polled, but was not polled to completion, then the
+        // channel is in the RECEIVING state and with a waker written. We must tell the sender
+        // we are no longer receiving, and then drop the waker. We must first move away from
+        // the RECEIVING state in order to not race with the sender around taking the waker.
+        #[cfg(feature = "async")]
+        if channel.state.load(Relaxed) == RECEIVING
+            && channel
+                .state
+                .compare_exchange(RECEIVING, EMPTY, Relaxed, Relaxed)
+                .is_ok()
+        {
+            // SAFETY: The RECEIVING state guarantees we have written a waker.
+            unsafe { channel.drop_waker() };
+        }
+
         // Set the channel state to disconnected and read what state the channel was in
         // ORDERING: Release is required so that in the states where the sender becomes responsible
         // for deallocating the channel, they can synchronize with this final state swap store from
@@ -1132,15 +1147,6 @@ impl<T> Drop for Receiver<T> {
                 // SAFETY: The acquire ordering of the swap above synchronize with the sender's
                 // final write of the state. So we can safely deallocate it.
                 unsafe { dealloc(self.channel_ptr) };
-            }
-            // This receiver was previously polled. But now we are dropped instead. The sender
-            // has never observed our RECEIVING state and we are resposnible for dropping the
-            // waker we previously wrote. The sender becomes responsible for deallocating the
-            // channel.
-            #[cfg(feature = "async")]
-            RECEIVING => {
-                // SAFETY: The RECEIVING state guarantees we have written a waker.
-                unsafe { channel.drop_waker() };
             }
             // The sender was already dropped. We are responsible for freeing the channel.
             DISCONNECTED => {
