@@ -101,12 +101,14 @@ fn tx_send_rx_recv_timeout() {
 fn tx_send_rx_try_recv_to_completion() {
     let (tx, rx) = oneshot::channel::<i32>();
 
-    let rx_thread = spawn_named("rx_thread", move || loop {
-        match rx.try_recv() {
-            Ok(999) => break,
-            Ok(val) => panic!("Unexpected Ok({val})"),
-            Err(oneshot::TryRecvError::Empty) => spin_loop(),
-            Err(oneshot::TryRecvError::Disconnected) => panic!("Unexpected disconnect"),
+    let rx_thread = spawn_named("rx_thread", move || {
+        loop {
+            match rx.try_recv() {
+                Ok(999) => break,
+                Ok(val) => panic!("Unexpected Ok({val})"),
+                Err(oneshot::TryRecvError::Empty) => spin_loop(),
+                Err(oneshot::TryRecvError::Disconnected) => panic!("Unexpected disconnect"),
+            }
         }
     });
 
@@ -263,11 +265,13 @@ fn tx_drop_rx_recv_timeout() {
 fn tx_drop_rx_try_recv_to_completion() {
     let (tx, rx) = oneshot::channel::<i32>();
 
-    let rx_thread = spawn_named("rx_thread", move || loop {
-        match rx.try_recv() {
-            Ok(val) => panic!("Unexpected Ok({val})"),
-            Err(oneshot::TryRecvError::Empty) => spin_loop(),
-            Err(oneshot::TryRecvError::Disconnected) => break,
+    let rx_thread = spawn_named("rx_thread", move || {
+        loop {
+            match rx.try_recv() {
+                Ok(val) => panic!("Unexpected Ok({val})"),
+                Err(oneshot::TryRecvError::Empty) => spin_loop(),
+                Err(oneshot::TryRecvError::Disconnected) => break,
+            }
         }
     });
 

@@ -8,8 +8,8 @@ use alloc::sync::Arc;
 use core::sync::atomic::{AtomicUsize, Ordering::SeqCst};
 #[cfg(oneshot_loom)]
 use loom::sync::{
-    atomic::{AtomicUsize, Ordering::SeqCst},
     Arc,
+    atomic::{AtomicUsize, Ordering::SeqCst},
 };
 
 #[cfg(oneshot_loom)]

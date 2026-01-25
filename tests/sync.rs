@@ -20,7 +20,7 @@ mod thread {
 }
 
 mod helpers;
-use helpers::{maybe_loom_model, DropCounter};
+use helpers::{DropCounter, maybe_loom_model};
 
 #[test]
 fn send_before_try_recv() {

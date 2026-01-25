@@ -141,12 +141,12 @@ use core::{
 #[cfg(not(oneshot_loom))]
 use core::{
     cell::UnsafeCell,
-    sync::atomic::{fence, AtomicU8, Ordering::*},
+    sync::atomic::{AtomicU8, Ordering::*, fence},
 };
 #[cfg(oneshot_loom)]
 use loom::{
     cell::UnsafeCell,
-    sync::atomic::{fence, AtomicU8, Ordering::*},
+    sync::atomic::{AtomicU8, Ordering::*, fence},
 };
 
 #[cfg(all(any(feature = "std", feature = "async"), not(oneshot_loom)))]
@@ -165,10 +165,10 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "std")]
 mod thread {
     #[cfg(not(oneshot_loom))]
-    pub use std::thread::{current, park, park_timeout, Thread};
+    pub use std::thread::{Thread, current, park, park_timeout};
 
     #[cfg(oneshot_loom)]
-    pub use loom::thread::{current, park, Thread};
+    pub use loom::thread::{Thread, current, park};
 
     // loom does not support parking with a timeout. So we just
     // yield. This means that the "park" will "spuriously" wake up
@@ -396,9 +396,11 @@ impl<T> Sender<T> {
     /// At most one Sender must exist for a channel at any point in time.
     /// Constructing multiple Senders from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        Self {
-            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
-            _invariant: PhantomData,
+        unsafe {
+            Self {
+                channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
+                _invariant: PhantomData,
+            }
         }
     }
 }
@@ -1017,8 +1019,10 @@ impl<T> Receiver<T> {
     /// At most one Receiver must exist for a channel at any point in time.
     /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        Self {
-            channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
+        unsafe {
+            Self {
+                channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
+            }
         }
     }
 }
@@ -1267,14 +1271,16 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn message(&self) -> &MaybeUninit<T> {
-        #[cfg(oneshot_loom)]
-        {
-            self.message.with(|ptr| &*ptr)
-        }
+        unsafe {
+            #[cfg(oneshot_loom)]
+            {
+                self.message.with(|ptr| &*ptr)
+            }
 
-        #[cfg(not(oneshot_loom))]
-        {
-            &*self.message.get()
+            #[cfg(not(oneshot_loom))]
+            {
+                &*self.message.get()
+            }
         }
     }
 
@@ -1283,14 +1289,16 @@ impl<T> Channel<T> {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
-        #[cfg(oneshot_loom)]
-        {
-            self.message.with_mut(|ptr| op(&mut *ptr))
-        }
+        unsafe {
+            #[cfg(oneshot_loom)]
+            {
+                self.message.with_mut(|ptr| op(&mut *ptr))
+            }
 
-        #[cfg(not(oneshot_loom))]
-        {
-            op(&mut *self.message.get())
+            #[cfg(not(oneshot_loom))]
+            {
+                op(&mut *self.message.get())
+            }
         }
     }
 
@@ -1313,25 +1321,31 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn write_message(&self, message: T) {
-        self.with_message_mut(|slot| slot.as_mut_ptr().write(message));
+        unsafe {
+            self.with_message_mut(|slot| slot.as_mut_ptr().write(message));
+        }
     }
 
     #[inline(always)]
     unsafe fn take_message(&self) -> T {
-        #[cfg(oneshot_loom)]
-        {
-            self.message.with(|ptr| ptr::read(ptr)).assume_init()
-        }
+        unsafe {
+            #[cfg(oneshot_loom)]
+            {
+                self.message.with(|ptr| ptr::read(ptr)).assume_init()
+            }
 
-        #[cfg(not(oneshot_loom))]
-        {
-            ptr::read(self.message.get()).assume_init()
+            #[cfg(not(oneshot_loom))]
+            {
+                ptr::read(self.message.get()).assume_init()
+            }
         }
     }
 
     #[inline(always)]
     unsafe fn drop_message(&self) {
-        self.with_message_mut(|slot| slot.assume_init_drop());
+        unsafe {
+            self.with_message_mut(|slot| slot.assume_init_drop());
+        }
     }
 
     #[cfg(any(feature = "std", feature = "async"))]
@@ -1342,14 +1356,16 @@ impl<T> Channel<T> {
 
     #[inline(always)]
     unsafe fn take_waker(&self) -> ReceiverWaker {
-        #[cfg(oneshot_loom)]
-        {
-            self.waker.with(|ptr| ptr::read(ptr)).assume_init()
-        }
+        unsafe {
+            #[cfg(oneshot_loom)]
+            {
+                self.waker.with(|ptr| ptr::read(ptr)).assume_init()
+            }
 
-        #[cfg(not(oneshot_loom))]
-        {
-            ptr::read(self.waker.get()).assume_init()
+            #[cfg(not(oneshot_loom))]
+            {
+                ptr::read(self.waker.get()).assume_init()
+            }
         }
     }
 
@@ -1470,5 +1486,5 @@ const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
 ///   release ordering or stronger.
 #[inline]
 pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
-    drop(Box::from_raw(channel.as_ptr()))
+    unsafe { drop(Box::from_raw(channel.as_ptr())) }
 }

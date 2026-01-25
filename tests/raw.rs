@@ -1,6 +1,6 @@
 #![cfg(not(oneshot_loom))]
 
-use oneshot::{channel, Receiver, Sender};
+use oneshot::{Receiver, Sender, channel};
 
 #[test]
 fn test_raw_sender() {

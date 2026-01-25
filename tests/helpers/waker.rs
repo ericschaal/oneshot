@@ -1,8 +1,8 @@
 //! Creates a Waker that can be observed from tests.
 
 use std::mem::forget;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{RawWaker, RawWakerVTable, Waker};
 
 #[derive(Default)]

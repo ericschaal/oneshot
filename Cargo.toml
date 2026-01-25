@@ -13,8 +13,8 @@ both thread blocking receive operations as well as Future based async polling.
 repository = "https://github.com/faern/oneshot"
 keywords = ["oneshot", "spsc", "async", "sync", "channel"]
 categories = ["asynchronous", "concurrency"]
-edition = "2021"
-rust-version = "1.60.0"
+edition = "2024"
+rust-version = "1.85.0"
 
 [features]
 # None of the features are on by default, by design. Default features is an anti-pattern.
