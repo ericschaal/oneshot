@@ -718,7 +718,8 @@ impl<T> Receiver<T> {
                         // any reads or writes visible to the sending thread
                         channel.state.store(DISCONNECTED, Relaxed);
 
-                        // SAFETY: we were just in the message state so the message is valid
+                        // SAFETY: we were just in the message state so the message is valid, and
+                        // we issued an acquire memory ordering on the load that observed MESSAGE
                         break Ok(unsafe { channel.take_message() });
                     }
                     // The sender was dropped while we were parked.
@@ -938,33 +939,42 @@ impl<T> Receiver<T> {
                 // our write of the waker. We use relaxed ordering on failure since the sender does
                 // not need to synchronize with our write and the individual match arms handle any
                 // additional synchronization
-                match channel
-                    .state
-                    .compare_exchange(EMPTY, RECEIVING, Release, Relaxed)
-                {
+                match channel.state.swap(RECEIVING, Release) {
                     // We stored our waker, now we delegate to the callback to finish the receive
                     // operation
-                    Ok(_) => finish(channel),
+                    EMPTY => finish(channel),
                     // The sender sent the message while we prepared to finish
-                    Err(MESSAGE) => {
-                        // See comments in `recv` for ordering and safety
-
-                        fence(Acquire);
-
+                    MESSAGE => {
+                        // SAFETY: We wrote a waker above. The sender cannot have observed the
+                        // RECEIVING state, so it has not accessed the waker. We must drop it.
                         unsafe { channel.drop_waker() };
 
-                        // ORDERING: the sender has been `mem::forget`-ed so this update only
-                        // needs to be visible to us
+                        // ORDERING: Can be relaxed since this only needs to be visible to us (drop)
                         channel.state.store(DISCONNECTED, Relaxed);
+
+                        // ORDERING: Synchronize with the write of the message and the sender's
+                        // final write of the channel state. This branch is unlikely to be taken,
+                        // so we use a dedicated fence instead putting it on the swap above.
+                        fence(Acquire);
 
                         // SAFETY: The MESSAGE state tells us there is a correctly initialized
                         // message
                         Ok(unsafe { channel.take_message() })
                     }
                     // The sender was dropped before sending anything while we prepared to park.
-                    Err(DISCONNECTED) => {
-                        // See comments in `recv` for safety
+                    DISCONNECTED => {
+                        // SAFETY: We wrote a waker above. The sender cannot have observed the
+                        // RECEIVING state, so it has not accessed the waker. We must drop it.
                         unsafe { channel.drop_waker() };
+
+                        // ORDERING: Can be relaxed since this only needs to be visible to us (drop)
+                        channel.state.store(DISCONNECTED, Relaxed);
+
+                        // ORDERING: Synchronize with the sender's final write of the channel
+                        // state. This branch is unlikely to be taken, so we use a dedicated fence
+                        // instead putting it on the swap above.
+                        fence(Acquire);
+
                         Err(disconnected_error)
                     }
                     _ => unreachable!(),
