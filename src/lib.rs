@@ -244,7 +244,7 @@ pub struct Sender<T> {
 /// Can be used to receive a message from the corresponding [`Sender`]. How the message
 /// can be received depends on what features are enabled.
 ///
-/// This type implement [`IntoFuture`](core::future::IntoFuture) when the `async` feature is enabled.
+/// This type implement [`IntoFuture`] when the `async` feature is enabled.
 /// This allows awaiting it directly in an async context.
 #[derive(Debug)]
 pub struct Receiver<T> {
