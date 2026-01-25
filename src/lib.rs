@@ -75,6 +75,13 @@
 //! # }
 //! ```
 //!
+//! # Send has happens-before relationship with receive
+//!
+//! All the various ways the `Receiver` can obtain the message out of the channel is synchronized
+//! with the `Sender`s `send` method. This means any operations and memory modifications done in
+//! the sender thread before the call to `Sender::send` are guaranteed to happen before any code
+//! running after the message has been received in the receiver thread.
+//!
 //! # Sync vs async
 //!
 //! The main motivation for writing this library was that there were no (known to me) channel
@@ -270,6 +277,11 @@ impl<T> Sender<T> {
     /// depends on your executor. If this method returns a `SendError`, please mind that dropping
     /// the error involves running any drop implementation on the message type, and freeing the
     /// channel's heap allocation, which might or might not be lock-free.
+    ///
+    /// This send call has a happens-before relationship with the various ways the receiver
+    /// can obtain the message on the other side. The sending and receiving is synchronized in
+    /// such a way that all operations and memory modifications before the send call is guaranteed
+    /// to be visible to the receiving thread when in receives the message on the channel.
     pub fn send(self, message: T) -> Result<(), SendError<T>> {
         let channel_ptr = self.channel_ptr;
 
