@@ -75,6 +75,13 @@
 //! # }
 //! ```
 //!
+//! # Send has happens-before relationship with receive
+//!
+//! All the various ways the `Receiver` can obtain the message out of the channel is synchronized
+//! with the `Sender`s `send` method. This means any operations and memory modifications done in
+//! the sender thread before the call to `Sender::send` are guaranteed to happen before any code
+//! running after the message has been received in the receiver thread.
+//!
 //! # Sync vs async
 //!
 //! The main motivation for writing this library was that there were no (known to me) channel
@@ -270,6 +277,11 @@ impl<T> Sender<T> {
     /// depends on your executor. If this method returns a `SendError`, please mind that dropping
     /// the error involves running any drop implementation on the message type, and freeing the
     /// channel's heap allocation, which might or might not be lock-free.
+    ///
+    /// This send call has a happens-before relationship with the various ways the receiver
+    /// can obtain the message on the other side. The sending and receiving is synchronized in
+    /// such a way that all operations and memory modifications before the send call is guaranteed
+    /// to be visible to the receiving thread when in receives the message on the channel.
     pub fn send(self, message: T) -> Result<(), SendError<T>> {
         let channel_ptr = self.channel_ptr;
 
@@ -301,6 +313,11 @@ impl<T> Sender<T> {
             // The receiver is alive and has not started waiting. Send done.
             EMPTY => Ok(()),
             // The receiver is waiting. Wake it up so it can return the message.
+            // We transitioned into the UNPARKING state. If the receiver observes this state
+            // it will busy loop until it has observed the sender transitioning into another
+            // state. As a result we do not have to worry about the receiver making changes
+            // to the channel in this branch. But we must also be quick since the receiver
+            // might be stuck in a loop.
             RECEIVING => {
                 // Take the waker, but critically do not unpark it. If we unparked now, then the
                 // receiving thread could still observe the UNPARKING state and re-park, meaning
@@ -308,7 +325,7 @@ impl<T> Sender<T> {
                 // or until a spurious wakeup.
                 // SAFETY: at this point we are in the UNPARKING state, and the receiving thread
                 // does not access the waker while in this state, nor does it free the channel
-                // allocation in this state. The acquire ordering above establish a happens-before
+                // allocation in this state. The acquire ordering above establishes a happens-before
                 // relationship with the writing of the waker.
                 let waker = unsafe { channel.take_waker() };
 
@@ -415,6 +432,11 @@ impl<T> Drop for Sender<T> {
             // responsible for deallocating the channel.
             EMPTY => (),
             // The receiver is waiting. Wake it up so it can detect that the channel disconnected.
+            // We transitioned into the UNPARKING state. If the receiver observes this state
+            // it will busy loop until it has observed the sender transitioning into another
+            // state. As a result we do not have to worry about the receiver making changes
+            // to the channel in this branch. But we must also be quick since the receiver
+            // might be stuck in a loop.
             RECEIVING => {
                 // See comments in Sender::send
 
@@ -874,7 +896,7 @@ impl<T> Receiver<T> {
 
         // ORDERING: An acquire ordering is used to guarantee no subsequent loads is reordered
         // before this one. This upholds the contract that if true is returned, the next call to
-        // a receive method is guaranteed to also abserve the `MESSAGE` state and return a message.
+        // a receive method is guaranteed to also observe the `MESSAGE` state and return a message.
         channel.state.load(Acquire) == MESSAGE
     }
 
@@ -1212,7 +1234,7 @@ mod states {
 }
 use states::*;
 
-/// Internal channel data structure structure. the `channel` method allocates and puts one instance
+/// Internal channel data structure. The `channel` method allocates and puts one instance
 /// of this struct on the heap for each oneshot channel instance. The struct holds:
 /// * The current state of the channel.
 /// * The message in the channel. This memory is uninitialized until the message is sent.

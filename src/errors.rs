@@ -7,7 +7,7 @@ use core::ptr::NonNull;
 /// [`Sender::send`](crate::Sender::send) if the corresponding [`Receiver`](crate::Receiver)
 /// has already been dropped.
 ///
-/// The message that could not be sent can be retreived again with [`SendError::into_inner`].
+/// The message that could not be sent can be retrieved again with [`SendError::into_inner`].
 pub struct SendError<T> {
     channel_ptr: NonNull<Channel<T>>,
 }
