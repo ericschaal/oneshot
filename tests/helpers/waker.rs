@@ -1,8 +1,8 @@
 //! Creates a Waker that can be observed from tests.
 
 use std::mem::forget;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::task::{RawWaker, RawWakerVTable, Waker};
 
 #[derive(Default)]
@@ -38,7 +38,7 @@ pub(super) fn waker_vtable() -> &'static RawWakerVTable {
 }
 
 unsafe fn clone_raw(data: *const ()) -> RawWaker {
-    let handle: Arc<WakerHandle> = Arc::from_raw(data as *const _);
+    let handle: Arc<WakerHandle> = unsafe { Arc::from_raw(data as *const _) };
     handle.clone_count.fetch_add(1, Ordering::Relaxed);
     forget(handle.clone());
     forget(handle);
@@ -46,19 +46,19 @@ unsafe fn clone_raw(data: *const ()) -> RawWaker {
 }
 
 unsafe fn wake_raw(data: *const ()) {
-    let handle: Arc<WakerHandle> = Arc::from_raw(data as *const _);
+    let handle: Arc<WakerHandle> = unsafe { Arc::from_raw(data as *const _) };
     handle.wake_count.fetch_add(1, Ordering::Relaxed);
     handle.drop_count.fetch_add(1, Ordering::Relaxed);
 }
 
 unsafe fn wake_by_ref_raw(data: *const ()) {
-    let handle: Arc<WakerHandle> = Arc::from_raw(data as *const _);
+    let handle: Arc<WakerHandle> = unsafe { Arc::from_raw(data as *const _) };
     handle.wake_count.fetch_add(1, Ordering::Relaxed);
     forget(handle)
 }
 
 unsafe fn drop_raw(data: *const ()) {
-    let handle: Arc<WakerHandle> = Arc::from_raw(data as *const _);
+    let handle: Arc<WakerHandle> = unsafe { Arc::from_raw(data as *const _) };
     handle.drop_count.fetch_add(1, Ordering::Relaxed);
     drop(handle)
 }

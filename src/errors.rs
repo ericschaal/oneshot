@@ -1,4 +1,4 @@
-use super::{dealloc, Channel};
+use super::{Channel, dealloc};
 use core::fmt;
 use core::mem;
 use core::ptr::NonNull;

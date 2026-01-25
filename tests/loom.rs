@@ -20,11 +20,13 @@ fn try_recv() {
     loom::model(|| {
         let (sender, receiver) = oneshot::channel::<u128>();
 
-        let t = thread::spawn(move || loop {
-            match receiver.try_recv() {
-                Ok(msg) => break msg,
-                Err(TryRecvError::Empty) => hint::spin_loop(),
-                Err(TryRecvError::Disconnected) => panic!("Should not be disconnected"),
+        let t = thread::spawn(move || {
+            loop {
+                match receiver.try_recv() {
+                    Ok(msg) => break msg,
+                    Err(TryRecvError::Empty) => hint::spin_loop(),
+                    Err(TryRecvError::Disconnected) => panic!("Should not be disconnected"),
+                }
             }
         });
 

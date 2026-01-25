@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 - Disable both the `std` and `async` features by default. Making them opt-in instead of opt-out.
   This makes the library more minimal by default and only contains the functionality that the
   user explicitly enables. This is a breaking change.
+- Upgrade to Rust 2024 edition. This also bumps the MSRV to 1.85.0
 
 
 ## [0.1.12] - 2026-01-25
