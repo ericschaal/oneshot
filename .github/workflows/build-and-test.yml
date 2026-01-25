@@ -22,7 +22,7 @@ jobs:
           - os: ubuntu-latest
             rust: nightly
           - os: ubuntu-latest
-            rust: 1.65.0
+            rust: 1.70.0
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
