@@ -36,6 +36,11 @@ jobs:
       - name: Install cargo-hack
         uses: taiki-e/install-action@cargo-hack
 
+      # The miri tests use too new Rust features to build on the oldest CI Rust version
+      - name: Remove miri tests on old Rust
+        if: matrix.rust == '1.70.0'
+        run: rm tests/miri.rs
+
       - name: Build
         shell: bash
         run: cargo build --locked
