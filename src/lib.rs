@@ -288,54 +288,58 @@ impl<T> Sender<T> {
         unsafe { channel.write_message(message) };
 
         // Set the state to signal there is a message on the channel.
-        // ORDERING: we use release ordering to ensure the write of the message is visible to the
-        // receiving thread. The EMPTY and DISCONNECTED branches do not observe any shared state,
-        // and thus we do not need acquire ordering. The RECEIVING branch manages synchronization
-        // independent of this operation.
+        // ORDERING: we need release ordering to allow the receiver to synchronize with our write
+        // of the message (and with our final write of the state, in the case where the receiver
+        // becomes responsible for freeing the channel.)
+        // We need Acquire ordering in the RECEIVING and DISCONNECTED branches as explained
+        // further down.
         //
         // EMPTY + 1 = MESSAGE
         // RECEIVING + 1 = UNPARKING
         // DISCONNECTED + 1 = invalid, however this state is never observed
-        match channel.state.fetch_add(1, Release) {
+        match channel.state.fetch_add(1, AcqRel) {
             // The receiver is alive and has not started waiting. Send done.
             EMPTY => Ok(()),
             // The receiver is waiting. Wake it up so it can return the message.
             RECEIVING => {
-                // ORDERING: Synchronizes with the write of the waker to memory, and prevents the
-                // taking of the waker from being ordered before this operation.
-                fence(Acquire);
-
                 // Take the waker, but critically do not unpark it. If we unparked now, then the
                 // receiving thread could still observe the UNPARKING state and re-park, meaning
                 // that after we change to the MESSAGE state, it would remain parked indefinitely
                 // or until a spurious wakeup.
                 // SAFETY: at this point we are in the UNPARKING state, and the receiving thread
                 // does not access the waker while in this state, nor does it free the channel
-                // allocation in this state.
+                // allocation in this state. The acquire ordering above establish a happens-before
+                // relationship with the writing of the waker.
                 let waker = unsafe { channel.take_waker() };
 
-                // ORDERING: this ordering serves two-fold: it synchronizes with the acquire load
-                // in the receiving thread, ensuring that both our read of the waker and write of
-                // the message happen-before the taking of the message and freeing of the channel.
-                // Furthermore, we need acquire ordering to ensure the unparking of the receiver
+                // ORDERING: this ordering serves two-fold: The release store synchronizes with
+                // the acquire load in the receiving thread, ensuring that both our read of the
+                // waker and write of the message happen-before the taking of the message and
+                // freeing of the channel.
+                // Furthermore, we need acquire ordering to ensure the unparking below
                 // happens after the channel state is updated.
+                //
+                // We do not need to observe and act on the state that was replaced here.
+                // in the UNPARKING state, the receiver must just wait for us to set a final state
                 channel.state.swap(MESSAGE, AcqRel);
 
-                // Note: it is possible that between the store above and this statement that
+                // Note: it is possible that between the store above and this statement
                 // the receiving thread is spuriously unparked, takes the message, and frees
-                // the channel allocation. However, we took ownership of the channel out of
-                // that allocation, and freeing the channel does not drop the waker since the
+                // the channel. However, we took ownership of the waker out of the channel,
+                // and freeing the channel does not drop the waker since the
                 // waker is wrapped in MaybeUninit. Therefore this data is valid regardless of
                 // whether or not the receive has completed by this point.
                 waker.unpark();
 
                 Ok(())
             }
-            // The receiver was already dropped. The error is responsible for freeing the channel.
-            // SAFETY: since the receiver disconnected it will no longer access `channel_ptr`, so
-            // we can transfer exclusive ownership of the channel's resources to the error.
-            // Moreover, since we just placed the message in the channel, the channel contains a
-            // valid message.
+            // The receiver was already dropped. The `SendError` is responsible for freeing the
+            // channel.
+            // SAFETY: The acquire ordering in the fetch_add above synchronizes with the receiver's
+            // write of the DISCONNECTED state. Since the receiver disconnected it will no longer
+            // access `channel_ptr`, so we can transfer exclusive ownership of the channel's
+            // resources to the error. Moreover, since we just placed the message in the channel,
+            // the channel contains a valid message.
             DISCONNECTED => Err(unsafe { SendError::new(channel_ptr) }),
             _ => unreachable!(),
         }
