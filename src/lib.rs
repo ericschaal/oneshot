@@ -468,8 +468,9 @@ impl<T> Receiver<T> {
         // SAFETY: The channel will not be freed while this method is still running.
         let channel = unsafe { self.channel_ptr.as_ref() };
 
-        // ORDERING: we use acquire ordering to synchronize with the store of the message.
-        match channel.state.load(Acquire) {
+        // ORDERING: Relaxed is fine since the only branch that needs synchronization is MESSAGE,
+        // and that branch has its own synchronization.
+        match channel.state.load(Relaxed) {
             MESSAGE => {
                 // It's okay to break up the load and store since once we're in the message state
                 // the sender no longer modifies the state
@@ -477,7 +478,14 @@ impl<T> Receiver<T> {
                 // we don't need to make any side effects visible to it
                 channel.state.store(DISCONNECTED, Relaxed);
 
-                // SAFETY: we are in the MESSAGE state so the message is present
+                // We need to establish a happens-before relationship with the sender's write
+                // of the MESSAGE state in order to ensure that the message is visible to us.
+                // This is a separate fence instead of part of the load above to optimize the
+                // try_recv performance for the EMPTY case, since a common use case is in a polling
+                // loop, and we only need to synchronize once the message has arrived.
+                fence(Acquire);
+                // SAFETY: we are in the MESSAGE state so the message is present and we have
+                // synchronized with the sender's write of the MESSAGE state.
                 Ok(unsafe { channel.take_message() })
             }
             EMPTY => Err(TryRecvError::Empty),
