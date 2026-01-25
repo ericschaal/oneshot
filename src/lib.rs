@@ -313,6 +313,11 @@ impl<T> Sender<T> {
             // The receiver is alive and has not started waiting. Send done.
             EMPTY => Ok(()),
             // The receiver is waiting. Wake it up so it can return the message.
+            // We transitioned into the UNPARKING state. If the receiver observes this state
+            // it will busy loop until it has observed the sender transitioning into another
+            // state. As a result we do not have to worry about the receiver making changes
+            // to the channel in this branch. But we must also be quick since the receiver
+            // might be stuck in a loop.
             RECEIVING => {
                 // Take the waker, but critically do not unpark it. If we unparked now, then the
                 // receiving thread could still observe the UNPARKING state and re-park, meaning
@@ -427,6 +432,11 @@ impl<T> Drop for Sender<T> {
             // responsible for deallocating the channel.
             EMPTY => (),
             // The receiver is waiting. Wake it up so it can detect that the channel disconnected.
+            // We transitioned into the UNPARKING state. If the receiver observes this state
+            // it will busy loop until it has observed the sender transitioning into another
+            // state. As a result we do not have to worry about the receiver making changes
+            // to the channel in this branch. But we must also be quick since the receiver
+            // might be stuck in a loop.
             RECEIVING => {
                 // See comments in Sender::send
 
