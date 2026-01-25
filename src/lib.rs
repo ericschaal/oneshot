@@ -1292,16 +1292,14 @@ impl<T> Channel<T> {
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
+        #[cfg(oneshot_loom)]
         unsafe {
-            #[cfg(oneshot_loom)]
-            {
-                self.message.with_mut(|ptr| op(&mut *ptr))
-            }
+            self.message.with_mut(|ptr| op(&mut *ptr))
+        }
 
-            #[cfg(not(oneshot_loom))]
-            {
-                op(&mut *self.message.get())
-            }
+        #[cfg(not(oneshot_loom))]
+        unsafe {
+            op(&mut *self.message.get())
         }
     }
 
@@ -1313,7 +1311,7 @@ impl<T> Channel<T> {
     {
         #[cfg(oneshot_loom)]
         {
-            self.waker.with_mut(|ptr| op(&mut *ptr))
+            self.waker.with_mut(|ptr| op(unsafe { &mut *ptr }))
         }
 
         #[cfg(not(oneshot_loom))]
@@ -1335,16 +1333,14 @@ impl<T> Channel<T> {
     /// memory ordering to synchronize with the other thread's write of the message.
     #[inline(always)]
     unsafe fn take_message(&self) -> T {
+        #[cfg(oneshot_loom)]
         unsafe {
-            #[cfg(oneshot_loom)]
-            {
-                self.message.with(|ptr| ptr::read(ptr)).assume_init()
-            }
+            self.message.with(|ptr| ptr::read(ptr)).assume_init()
+        }
 
-            #[cfg(not(oneshot_loom))]
-            {
-                ptr::read(self.message.get()).assume_init()
-            }
+        #[cfg(not(oneshot_loom))]
+        unsafe {
+            ptr::read(self.message.get()).assume_init()
         }
     }
 
@@ -1371,16 +1367,14 @@ impl<T> Channel<T> {
     /// acquire memory ordering and then transitioned into the UNPARKING state.
     #[inline(always)]
     unsafe fn take_waker(&self) -> ReceiverWaker {
+        #[cfg(oneshot_loom)]
         unsafe {
-            #[cfg(oneshot_loom)]
-            {
-                self.waker.with(|ptr| ptr::read(ptr)).assume_init()
-            }
+            self.waker.with(|ptr| ptr::read(ptr)).assume_init()
+        }
 
-            #[cfg(not(oneshot_loom))]
-            {
-                ptr::read(self.waker.get()).assume_init()
-            }
+        #[cfg(not(oneshot_loom))]
+        unsafe {
+            ptr::read(self.waker.get()).assume_init()
         }
     }
 
