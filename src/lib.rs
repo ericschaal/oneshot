@@ -320,7 +320,7 @@ impl<T> Sender<T> {
                 // or until a spurious wakeup.
                 // SAFETY: at this point we are in the UNPARKING state, and the receiving thread
                 // does not access the waker while in this state, nor does it free the channel
-                // allocation in this state. The acquire ordering above establish a happens-before
+                // allocation in this state. The acquire ordering above establishes a happens-before
                 // relationship with the writing of the waker.
                 let waker = unsafe { channel.take_waker() };
 
@@ -886,7 +886,7 @@ impl<T> Receiver<T> {
 
         // ORDERING: An acquire ordering is used to guarantee no subsequent loads is reordered
         // before this one. This upholds the contract that if true is returned, the next call to
-        // a receive method is guaranteed to also abserve the `MESSAGE` state and return a message.
+        // a receive method is guaranteed to also observe the `MESSAGE` state and return a message.
         channel.state.load(Acquire) == MESSAGE
     }
 
@@ -1224,7 +1224,7 @@ mod states {
 }
 use states::*;
 
-/// Internal channel data structure structure. the `channel` method allocates and puts one instance
+/// Internal channel data structure. The `channel` method allocates and puts one instance
 /// of this struct on the heap for each oneshot channel instance. The struct holds:
 /// * The current state of the channel.
 /// * The message in the channel. This memory is uninitialized until the message is sent.
