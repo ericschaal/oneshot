@@ -62,6 +62,12 @@ jobs:
           RUSTFLAGS+="--cfg oneshot_loom" LOOM_MAX_BRANCHES=100000 \
             cargo hack --feature-powerset --exclude-all-features --features loom test
 
+      # Check that the benchmarks builds and has no warnings (but don't run them)
+      - name: Build benchmarks
+        if: matrix.rust == 'stable' && matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: RUSTFLAGS+="--cfg criterion" cargo bench --no-run --all-features
+
       # Check that the documentation builds and has no warnings
       - name: Build documentation
         shell: bash

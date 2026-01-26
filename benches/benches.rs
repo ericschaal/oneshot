@@ -15,6 +15,8 @@ criterion::criterion_main!(benches);
 
 #[cfg(criterion)]
 mod imp {
+    use std::hint::black_box;
+
     macro_rules! bench_send_and_recv {
         ($c:expr, $($type:ty => $value:expr);+) => {
             // Sanity check that all $values are of $type.
@@ -31,7 +33,7 @@ mod imp {
                 $(group.bench_function(stringify!($type), |b| {
                     b.iter(|| {
                         let (sender, _receiver) = oneshot::channel();
-                        sender.send(criterion::black_box($value)).unwrap()
+                        sender.send(black_box($value)).unwrap()
                     });
                 });)*
                 group.finish();
@@ -41,7 +43,7 @@ mod imp {
                 $(group.bench_function(stringify!($type), |b| {
                     b.iter(|| {
                         let (sender, _) = oneshot::channel();
-                        sender.send(criterion::black_box($value)).unwrap_err()
+                        sender.send(black_box($value)).unwrap_err()
                     });
                 });)*
                 group.finish();
@@ -52,7 +54,7 @@ mod imp {
                 $(group.bench_function(stringify!($type), |b| {
                     b.iter(|| {
                         let (sender, receiver) = oneshot::channel();
-                        sender.send(criterion::black_box($value)).unwrap();
+                        sender.send(black_box($value)).unwrap();
                         receiver.recv().unwrap()
                     });
                 });)*
@@ -64,7 +66,7 @@ mod imp {
                 $(group.bench_function(stringify!($type), |b| {
                     b.iter(|| {
                         let (sender, receiver) = oneshot::channel();
-                        sender.send(criterion::black_box($value)).unwrap();
+                        sender.send(black_box($value)).unwrap();
                         receiver.recv_ref().unwrap()
                     });
                 });)*
