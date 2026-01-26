@@ -19,6 +19,7 @@ fn multiple_receiver_polls_keeps_only_latest_waker() {
     }
 
     fn clone_mock_waker(waker: *const ()) -> task::RawWaker {
+        // SAFETY: The caller must ensure this function is called with a valid pointer.
         let mock_waker = unsafe { Arc::from_raw(waker as *const Mutex<MockWaker>) };
         mock_waker.lock().unwrap().cloned += 1;
         let new_waker =
@@ -28,6 +29,7 @@ fn multiple_receiver_polls_keeps_only_latest_waker() {
     }
 
     fn drop_mock_waker(waker: *const ()) {
+        // SAFETY: The caller must ensure this function is called with a valid pointer.
         let mock_waker = unsafe { Arc::from_raw(waker as *const Mutex<MockWaker>) };
         mock_waker.lock().unwrap().dropped += 1;
     }
@@ -39,6 +41,7 @@ fn multiple_receiver_polls_keeps_only_latest_waker() {
         let mock_waker1 = Arc::new(Mutex::new(MockWaker::default()));
         let raw_waker1 =
             task::RawWaker::new(Arc::into_raw(mock_waker1.clone()) as *const (), &VTABLE);
+        // SAFETY: The caller must ensure this function is called with a valid pointer.
         let waker1 = unsafe { task::Waker::from_raw(raw_waker1) };
         let mut context1 = task::Context::from_waker(&waker1);
 
@@ -52,6 +55,7 @@ fn multiple_receiver_polls_keeps_only_latest_waker() {
         let mock_waker2 = Arc::new(Mutex::new(MockWaker::default()));
         let raw_waker2 =
             task::RawWaker::new(Arc::into_raw(mock_waker2.clone()) as *const (), &VTABLE);
+        // SAFETY: The caller must ensure this function is called with a valid pointer.
         let waker2 = unsafe { task::Waker::from_raw(raw_waker2) };
         let mut context2 = task::Context::from_waker(&waker2);
 
