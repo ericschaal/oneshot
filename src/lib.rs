@@ -270,6 +270,9 @@ unsafe impl<T: Sync> Sync for Sender<T> {}
 // making sure the access to that channel object is properly synchronized
 unsafe impl<T: Send> Send for Receiver<T> {}
 
+// The Receiver can NOT be `Sync`! The current receive implementations that take `&self`
+// assume no other receive operation runs in parallel.
+
 impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
