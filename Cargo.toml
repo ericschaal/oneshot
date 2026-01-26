@@ -22,7 +22,6 @@ rust-version = "1.85.0"
 # feature list, they accidentally pull in unnecessary complexity and sometimes even
 # dependencies. By making everything opt-in, we avoid this problem. Opting in to a feature
 # is so simple in Cargo anyway, and makes it more explicit what functionality it uses.
-default = []
 
 # Enables usage of libstd. Adds support for thread blocking receive methods.
 std = []
