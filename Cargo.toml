@@ -42,7 +42,7 @@ async-std = { version = "1", features = ["attributes"] }
 # pulled in during `cargo test` runs. Mostly because criterion has a much higher MSRV than
 # this library, so it becomes impossible to run `cargo test` on the MSRV compiler without
 # this hack.
-# To run benchmarks, run with `RUSTFLAGS="--cfg criterion" cargo bench`
+# To run benchmarks, run with `RUSTFLAGS="--cfg criterion" cargo bench --all-features`
 [target.'cfg(criterion)'.dev-dependencies]
 criterion = "0.8.1"
 
