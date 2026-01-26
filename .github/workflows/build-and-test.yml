@@ -40,12 +40,12 @@ jobs:
 
       - name: Build
         shell: bash
-        run: cargo build --locked
+        run: cargo hack --feature-powerset --exclude-all-features build --locked
 
       # Run through all tests with all combinations of features
       - name: Test
         shell: bash
-        run: cargo hack --feature-powerset --exclude-all-features test
+        run: cargo hack --feature-powerset --exclude-all-features test --locked
 
       # Run `cargo test` but with artificial delay injected into some code paths. This helps
       # running through some hard-to-time code paths. loom testing is not included since it is not
