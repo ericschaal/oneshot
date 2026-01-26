@@ -1494,13 +1494,18 @@ fn receiver_waker_size() {
 const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
     "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
 
+/// Deallocates the channel's heap allocation (created in `oneshot::channel()`).
+///
 /// # Safety
-/// * `channel` must be a valid pointer to a `Channel<T>`.
-/// * The loading of `channel.state` in this thread that determined we are responsible for
-///   freeing the channel must synchronize with the other sides' writing of that state.
-///   This means our load must have acquire ordering or stronger, and their store must have
-///   release ordering or stronger.
+///
+/// * `channel` must be a valid pointer to a `Channel<T>` originally coming from
+///   `oneshot::channel()`.
+/// * The thread calling this function must have properly synchronized with any other thread
+///   that has used the channel (either the `Sender` or `Receiver`). This means having an
+///   acquire memory barrier on or after the loading of `channel.state` that determined that
+///   the other thread is fully done using the channel and we are responsible for freeing it.
 #[inline]
 pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
-    unsafe { drop(Box::from_raw(channel.as_ptr())) }
+    // SAFETY: Method guarantee that the pointer is valid and points to a Channel<T>.
+    drop(unsafe { Box::from_raw(channel.as_ptr()) });
 }
