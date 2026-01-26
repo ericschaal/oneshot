@@ -57,6 +57,7 @@ undocumented_unsafe_blocks = "warn"
 unicode_not_nfc = "warn"
 unused_async = "deny"
 wildcard_dependencies = "deny"
+wildcard_imports = "warn"
 
 [lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_loom)', 'cfg(oneshot_test_delay)', 'cfg(criterion)'] }
