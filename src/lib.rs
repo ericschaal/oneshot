@@ -405,11 +405,11 @@ impl<T> Sender<T> {
     /// At most one Sender must exist for a channel at any point in time.
     /// Constructing multiple Senders from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        unsafe {
-            Self {
-                channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
-                _invariant: PhantomData,
-            }
+        // SAFETY: Method guarantee that the pointer is valid and points to a Channel<T>.
+        let channel_ptr = unsafe { NonNull::new_unchecked(raw as *mut Channel<T>) };
+        Self {
+            channel_ptr,
+            _invariant: PhantomData,
         }
     }
 }
@@ -1031,11 +1031,9 @@ impl<T> Receiver<T> {
     /// At most one Receiver must exist for a channel at any point in time.
     /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        unsafe {
-            Self {
-                channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
-            }
-        }
+        // SAFETY: Method guarantee that the pointer is valid and points to a Channel<T>.
+        let channel_ptr = unsafe { NonNull::new_unchecked(raw as *mut Channel<T>) };
+        Self { channel_ptr }
     }
 }
 
