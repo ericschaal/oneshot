@@ -1290,9 +1290,16 @@ impl<T> Channel<T> {
         }
     }
 
+    /// Returns a reference to the message
+    ///
+    /// # Safety
+    ///
+    /// Must be called only when the caller can guarantee the message has been initialized, and
+    /// no other thread will access the message field for the lifetime of the returned reference.
     #[inline(always)]
-    unsafe fn message(&self) -> &MaybeUninit<T> {
-        unsafe {
+    unsafe fn message(&self) -> &T {
+        // SAFETY: The caller guarantees that no other thread will access the message field.
+        let message_container = unsafe {
             #[cfg(oneshot_loom)]
             {
                 self.message.with(|ptr| &*ptr)
@@ -1302,7 +1309,10 @@ impl<T> Channel<T> {
             {
                 &*self.message.get()
             }
-        }
+        };
+
+        // SAFETY: The caller guarantees that the message has been initialized.
+        unsafe { message_container.assume_init_ref() }
     }
 
     #[inline(always)]

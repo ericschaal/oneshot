@@ -61,9 +61,9 @@ impl<T> SendError<T> {
     /// Get a reference to the message that failed to be sent.
     #[inline]
     pub fn as_inner(&self) -> &T {
-        // SAFETY: we have ownership of the channel and require that the message is initialized
-        // upon construction
-        unsafe { self.channel_ptr.as_ref().message().assume_init_ref() }
+        // SAFETY: we have exclusive ownership of the channel and require that the message has
+        // been initialized upon construction.
+        unsafe { self.channel_ptr.as_ref().message() }
     }
 }
 
