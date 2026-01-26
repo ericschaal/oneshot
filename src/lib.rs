@@ -253,6 +253,10 @@ pub struct Receiver<T> {
     channel_ptr: NonNull<Channel<T>>,
 }
 
+// SAFETY: The core functionality of this library is to be able to pass channel ends to different
+// threads to then be able to pass messages between threads or tasks.
+// The sender only contains a pointer to the channel, and the entire library revolves around
+// making sure the access to that channel object is properly synchronized
 unsafe impl<T: Send> Send for Sender<T> {}
 
 // SAFETY: The only methods that assumes there is only a single reference to the sender
@@ -260,7 +264,12 @@ unsafe impl<T: Send> Send for Sender<T> {}
 // the time it is called.
 unsafe impl<T: Sync> Sync for Sender<T> {}
 
+// SAFETY: The core functionality of this library is to be able to pass channel ends to different
+// threads to then be able to pass messages between threads or tasks.
+// The receiver only contains a pointer to the channel, and the entire library revolves around
+// making sure the access to that channel object is properly synchronized
 unsafe impl<T: Send> Send for Receiver<T> {}
+
 impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
