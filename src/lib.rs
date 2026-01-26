@@ -1315,22 +1315,36 @@ impl<T> Channel<T> {
         unsafe { message_container.assume_init_ref() }
     }
 
+    /// Runs a closure with mutable access to the message field in the channel.
+    ///
+    /// # Safety
+    ///
+    /// This uses interior mutability to provide mutable access via a shared reference to
+    /// the channel. As a result, the caller must guarantee exclusive access to the message
+    /// field during this call.
     #[inline(always)]
     unsafe fn with_message_mut<F>(&self, op: F)
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
+        // SAFETY: The caller guarantees exclusive access to the message field.
         #[cfg(oneshot_loom)]
         unsafe {
             self.message.with_mut(|ptr| op(&mut *ptr))
         }
 
+        // SAFETY: The caller guarantees exclusive access to the message field.
         #[cfg(not(oneshot_loom))]
-        unsafe {
-            op(&mut *self.message.get())
-        }
+        op(unsafe { &mut *self.message.get() })
     }
 
+    /// Runs a closure with mutable access to the waker field in the channel.
+    ///
+    /// # Safety
+    ///
+    /// This uses interior mutability to provide mutable access via a shared reference to
+    /// the channel. As a result, the caller must guarantee exclusive access to the waker
+    /// field during this call.
     #[inline(always)]
     #[cfg(any(feature = "std", feature = "async"))]
     unsafe fn with_waker_mut<F>(&self, op: F)
@@ -1339,37 +1353,55 @@ impl<T> Channel<T> {
     {
         #[cfg(oneshot_loom)]
         {
+            // SAFETY: The caller guarantees exclusive access to the waker field.
             self.waker.with_mut(|ptr| op(unsafe { &mut *ptr }))
         }
 
         #[cfg(not(oneshot_loom))]
         {
+            // SAFETY: The caller guarantees exclusive access to the waker field.
             op(unsafe { &mut *self.waker.get() })
         }
     }
 
+    /// Writes a message to the message field in the channel. Will overwrite whatever
+    /// is currently stored in the field. To avoid potential memory leaks, the caller
+    /// should ensure that the waker field does not currently have any initialized
+    /// waker in it before calling this function.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee exclusive access to the message field during this call.
     #[inline(always)]
     unsafe fn write_message(&self, message: T) {
+        // SAFETY: The caller guarantees exclusive access to the message field.
         unsafe {
             self.with_message_mut(|slot| slot.as_mut_ptr().write(message));
         }
     }
 
+    /// Reads the message from the channel and returns it.
+    ///
     /// # Safety
     ///
     /// Must only be called after having observed the MESSAGE state with an acquire
     /// memory ordering to synchronize with the other thread's write of the message.
     #[inline(always)]
     unsafe fn take_message(&self) -> T {
-        #[cfg(oneshot_loom)]
-        unsafe {
-            self.message.with(|ptr| ptr::read(ptr)).assume_init()
-        }
+        // SAFETY: The caller guarantees that no other thread will access the message field.
+        let message_container = unsafe {
+            #[cfg(oneshot_loom)]
+            {
+                self.message.with(|ptr| ptr::read(ptr))
+            }
+            #[cfg(not(oneshot_loom))]
+            {
+                ptr::read(self.message.get())
+            }
+        };
 
-        #[cfg(not(oneshot_loom))]
-        unsafe {
-            ptr::read(self.message.get()).assume_init()
-        }
+        // SAFETY: The caller guarantees that the message has been initialized.
+        unsafe { message_container.assume_init() }
     }
 
     /// # Safety
@@ -1378,37 +1410,60 @@ impl<T> Channel<T> {
     /// memory ordering to synchronize with the other thread's write of the message.
     #[inline(always)]
     unsafe fn drop_message(&self) {
+        // SAFETY: The caller guarantees that the message has been initialized and that
+        // we have exclusive access for the duration of this call.
         unsafe {
             self.with_message_mut(|slot| slot.assume_init_drop());
         }
     }
 
+    /// Writes a waker to the waker field in the channel. Will overwrite whatever
+    /// is currently stored in the field. To avoid potential memory leaks, the caller
+    /// should ensure that the waker field does not currently have any initialized
+    /// waker in it before calling this function.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee exclusive access to the waker field during this call.
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn write_waker(&self, waker: ReceiverWaker) {
+        // SAFETY: The caller guarantees exclusive access to the waker field.
         unsafe { self.with_waker_mut(|slot| slot.as_mut_ptr().write(waker)) };
     }
 
     /// # Safety
     ///
-    /// Must only be called after having observed the RECEIVING state with
-    /// acquire memory ordering and then transitioned into the UNPARKING state.
+    /// Must be called only when the caller can guarantee the waker has been initialized (and
+    /// not already dropped), and no other thread will access the waker field during this call.
     #[inline(always)]
     unsafe fn take_waker(&self) -> ReceiverWaker {
-        #[cfg(oneshot_loom)]
+        // SAFETY: The caller guarantees that a waker has been initialized, and
+        // that no other thread will access the waker field during this call.
         unsafe {
-            self.waker.with(|ptr| ptr::read(ptr)).assume_init()
-        }
+            #[cfg(oneshot_loom)]
+            {
+                self.waker.with(|ptr| ptr::read(ptr)).assume_init()
+            }
 
-        #[cfg(not(oneshot_loom))]
-        unsafe {
-            ptr::read(self.waker.get()).assume_init()
+            #[cfg(not(oneshot_loom))]
+            {
+                ptr::read(self.waker.get()).assume_init()
+            }
         }
     }
 
+    /// Runs the `Drop` implementation on the channel waker.
+    ///
+    /// # Safety
+    ///
+    /// Must be called only when the caller can guarantee the waker has been initialized (and
+    /// not already dropped), and no other thread will access the waker field during this call.
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn drop_waker(&self) {
+        // SAFETY: The caller guarantees that a waker has been initialized, and that
+        // we have exclusive access while this method runs.
         unsafe { self.with_waker_mut(|slot| slot.assume_init_drop()) };
     }
 
