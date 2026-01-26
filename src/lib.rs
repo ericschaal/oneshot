@@ -162,6 +162,11 @@ use core::{
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
+mod states;
+#[cfg(any(feature = "std", feature = "async"))]
+use states::UNPARKING;
+use states::{DISCONNECTED, EMPTY, MESSAGE, RECEIVING};
+
 #[cfg(feature = "std")]
 mod thread {
     #[cfg(not(oneshot_loom))]
@@ -1238,28 +1243,6 @@ impl<T> Drop for Receiver<T> {
         }
     }
 }
-
-/// All the values that the `Channel::state` field can have during the lifetime of a channel.
-mod states {
-    // These values are very explicitly chosen so that we can replace some cmpxchg calls with
-    // fetch_* calls.
-
-    /// The initial channel state. Active while both endpoints are still alive, no message has been
-    /// sent, and the receiver is not receiving.
-    pub const EMPTY: u8 = 0b011;
-    /// A message has been sent to the channel, but the receiver has not yet read it.
-    pub const MESSAGE: u8 = 0b100;
-    /// No message has yet been sent on the channel, but the receiver is currently receiving.
-    pub const RECEIVING: u8 = 0b000;
-    #[cfg(any(feature = "std", feature = "async"))]
-    pub const UNPARKING: u8 = 0b001;
-    /// The channel has been closed. This means that either the sender or receiver has been dropped,
-    /// or the message sent to the channel has already been received. Since this is a oneshot
-    /// channel, it is disconnected after the one message it is supposed to hold has been
-    /// transmitted.
-    pub const DISCONNECTED: u8 = 0b010;
-}
-use states::*;
 
 /// Internal channel data structure. The `channel` method allocates and puts one instance
 /// of this struct on the heap for each oneshot channel instance.
