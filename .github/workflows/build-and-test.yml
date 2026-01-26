@@ -73,11 +73,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Miri
-        run: |
-          rustup toolchain install nightly --component miri
-          rustup override set nightly
-          cargo miri setup
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Setup Miri
+        run: cargo miri setup
 
       - name: Test with Miri
         run: |
