@@ -132,22 +132,10 @@
 #[cfg(not(oneshot_loom))]
 extern crate alloc;
 
-use core::{
-    marker::PhantomData,
-    mem::{self, MaybeUninit},
-    ptr::{self, NonNull},
-};
+use core::{marker::PhantomData, mem, ptr::NonNull};
 
-#[cfg(not(oneshot_loom))]
-use core::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicU8, Ordering::*, fence},
-};
-#[cfg(oneshot_loom)]
-use loom::{
-    cell::UnsafeCell,
-    sync::atomic::{AtomicU8, Ordering::*, fence},
-};
+mod atomic;
+use atomic::{Ordering::*, fence};
 
 #[cfg(all(any(feature = "std", feature = "async"), not(oneshot_loom)))]
 use core::hint;
@@ -162,6 +150,9 @@ use core::{
 #[cfg(feature = "std")]
 use std::time::{Duration, Instant};
 
+mod channel;
+use channel::Channel;
+
 mod states;
 #[cfg(any(feature = "std", feature = "async"))]
 use states::UNPARKING;
@@ -171,7 +162,6 @@ use states::{DISCONNECTED, EMPTY, MESSAGE, RECEIVING};
 mod thread;
 
 mod waker;
-use waker::ReceiverWaker;
 
 #[cfg(oneshot_loom)]
 mod loombox;
@@ -312,7 +302,7 @@ impl<T> Sender<T> {
         // EMPTY + 1 = MESSAGE
         // RECEIVING + 1 = UNPARKING
         // DISCONNECTED + 1 = invalid, however this state is never observed
-        match channel.state.fetch_add(1, AcqRel) {
+        match channel.state().fetch_add(1, AcqRel) {
             // The receiver is alive and has not started waiting. Send done.
             EMPTY => Ok(()),
             // The receiver is waiting. Wake it up so it can return the message.
@@ -341,7 +331,7 @@ impl<T> Sender<T> {
                 //
                 // We do not need to observe and act on the state that was replaced here.
                 // in the UNPARKING state, the receiver must just wait for us to set a final state
-                channel.state.swap(MESSAGE, AcqRel);
+                channel.state().swap(MESSAGE, AcqRel);
 
                 // Note: it is possible that between the store above and this statement
                 // the receiving thread is spuriously unparked, takes the message, and frees
@@ -377,7 +367,7 @@ impl<T> Sender<T> {
         // ORDERING: We *chose* a Relaxed ordering here as it sufficient to
         // enforce the method's contract: "if true is returned, a future
         // call to send is guaranteed to return an error."
-        channel.state.load(Relaxed) == DISCONNECTED
+        channel.state().load(Relaxed) == DISCONNECTED
     }
 
     /// Consumes the Sender, returning a raw pointer to the channel on the heap.
@@ -432,7 +422,7 @@ impl<T> Drop for Sender<T> {
         // EMPTY ^ 001 = DISCONNECTED
         // RECEIVING ^ 001 = UNPARKING
         // DISCONNECTED ^ 001 = EMPTY (invalid), but this state is never observed
-        match channel.state.fetch_xor(0b001, AcqRel) {
+        match channel.state().fetch_xor(0b001, AcqRel) {
             // The receiver is not waiting, nor is it dropped. The receiver is now
             // responsible for deallocating the channel.
             EMPTY => (),
@@ -457,7 +447,7 @@ impl<T> Drop for Sender<T> {
                 //
                 // We do not need to observe and act on the state that was replaced here.
                 // in the UNPARKING state, the receiver must just wait for us to set a final state
-                channel.state.swap(DISCONNECTED, AcqRel);
+                channel.state().swap(DISCONNECTED, AcqRel);
 
                 waker.unpark();
             }
@@ -497,13 +487,13 @@ impl<T> Receiver<T> {
 
         // ORDERING: Relaxed is fine since the only branch that needs synchronization is MESSAGE,
         // and that branch has its own synchronization.
-        match channel.state.load(Relaxed) {
+        match channel.state().load(Relaxed) {
             MESSAGE => {
                 // It's okay to break up the load and store since once we're in the message state
                 // the sender no longer modifies the state
                 // ORDERING: at this point the sender has done its job and is no longer active, so
                 // we don't need to make any side effects visible to it
-                channel.state.store(DISCONNECTED, Relaxed);
+                channel.state().store(DISCONNECTED, Relaxed);
 
                 // We need to establish a happens-before relationship with the sender's write
                 // of the MESSAGE state in order to ensure that the message is visible to us.
@@ -559,7 +549,7 @@ impl<T> Receiver<T> {
 
         // ORDERING: We use relaxed ordering since all branches that need synchronization has
         // their own fences. They are standalone fences to optimize for the EMPTY case
-        match channel.state.load(Relaxed) {
+        match channel.state().load(Relaxed) {
             // The sender is alive but has not sent anything yet. We prepare to park.
             EMPTY => {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
@@ -571,7 +561,7 @@ impl<T> Receiver<T> {
                 // Write our waker instance to the channel.
                 // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
                 // try to access the waker until it sees the state set to RECEIVING below
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
+                unsafe { channel.write_waker(waker::ReceiverWaker::current_thread()) };
 
                 // Switch the state to RECEIVING. We need to do this in one atomic step in case the
                 // sender disconnected or sent the message while we wrote the waker to memory. We
@@ -581,7 +571,7 @@ impl<T> Receiver<T> {
                 // ORDERING: we use release ordering so the sender can synchronize with our writing
                 // of the waker to memory. The individual branches that need acquire ordering handle
                 // it by themselves to not pay for it in the EMPTY case.
-                match channel.state.swap(RECEIVING, Release) {
+                match channel.state().swap(RECEIVING, Release) {
                     // We stored our waker, now we park until the sender has changed the state+
                     EMPTY => loop {
                         thread::park();
@@ -591,7 +581,7 @@ impl<T> Receiver<T> {
                         //  1. The write of the message.
                         //  2. The storing of the final state, so we know all code using the channel
                         //     has a happens-before relationship with our call to dealloc.
-                        match channel.state.load(Acquire) {
+                        match channel.state().load(Acquire) {
                             // The sender sent the message while we were parked.
                             MESSAGE => {
                                 // SAFETY: The MESSAGE state + acquire ordering guarantees
@@ -713,13 +703,13 @@ impl<T> Receiver<T> {
                 thread::park();
 
                 // ORDERING: we use acquire ordering to synchronize with the write of the message
-                match channel.state.load(Acquire) {
+                match channel.state().load(Acquire) {
                     // The sender sent the message while we were parked.
                     // We take the message and mark the channel disconnected.
                     MESSAGE => {
                         // ORDERING: the sender is inactive at this point so we don't need to make
                         // any reads or writes visible to the sending thread
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state().store(DISCONNECTED, Relaxed);
 
                         // SAFETY: The MESSAGE state + acquire ordering guarantees initialized
                         // message
@@ -782,11 +772,11 @@ impl<T> Receiver<T> {
                 thread::park();
 
                 // ORDERING: The callee has already synchronized with any message write
-                match channel.state.load(Relaxed) {
+                match channel.state().load(Relaxed) {
                     MESSAGE => {
                         // ORDERING: the sender has been dropped, so this update only
                         // needs to be visible to us
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state().store(DISCONNECTED, Relaxed);
                         // SAFETY: The MESSAGE state + acquire ordering in callee
                         // guarantees initialized message
                         break Ok(unsafe { channel.take_message() });
@@ -807,12 +797,12 @@ impl<T> Receiver<T> {
                         thread::park_timeout(timeout);
 
                         // ORDERING: synchronize with the write of the message
-                        match channel.state.load(Acquire) {
+                        match channel.state().load(Acquire) {
                             // The sender sent the message while we were parked.
                             MESSAGE => {
                                 // ORDERING: the sender has been `mem::forget`-ed so this update
                                 // only needs to be visible to us.
-                                channel.state.store(DISCONNECTED, Relaxed);
+                                channel.state().store(DISCONNECTED, Relaxed);
 
                                 // SAFETY: The MESSAGE state + acquire ordering guarantees
                                 // initialized message
@@ -827,7 +817,7 @@ impl<T> Receiver<T> {
                     }
                     None => {
                         // ORDERING: synchronize with the write of the message
-                        match channel.state.swap(EMPTY, Acquire) {
+                        match channel.state().swap(EMPTY, Acquire) {
                             // We reached the end of the timeout without receiving a message
                             RECEIVING => {
                                 // SAFETY: we were in the receiving state and are now in the empty
@@ -841,7 +831,7 @@ impl<T> Receiver<T> {
                             MESSAGE => {
                                 // Same safety and ordering as the Some branch
 
-                                channel.state.store(DISCONNECTED, Relaxed);
+                                channel.state().store(DISCONNECTED, Relaxed);
 
                                 // SAFETY: The MESSAGE state + acquire ordering guarantees
                                 // initialized message
@@ -853,7 +843,7 @@ impl<T> Receiver<T> {
                                 // that the sender is inactive and no longer observing the state,
                                 // so we only need to change it back to DISCONNECTED for if the
                                 // receiver is dropped or a recv* method is called again
-                                channel.state.store(DISCONNECTED, Relaxed);
+                                channel.state().store(DISCONNECTED, Relaxed);
 
                                 break Err(RecvTimeoutError::Disconnected);
                             }
@@ -889,7 +879,7 @@ impl<T> Receiver<T> {
         // enforce the method's contract. Once true has been observed, it will remain true.
         // However, if false is observed, the sender might have just disconnected but this thread
         // has not observed it yet.
-        channel.state.load(Relaxed) == DISCONNECTED
+        channel.state().load(Relaxed) == DISCONNECTED
     }
 
     /// Returns true if there is a message in the channel, ready to be received.
@@ -906,7 +896,7 @@ impl<T> Receiver<T> {
         // ORDERING: An acquire ordering is used to guarantee no subsequent loads is reordered
         // before this one. This upholds the contract that if true is returned, the next call to
         // a receive method is guaranteed to also observe the `MESSAGE` state and return a message.
-        channel.state.load(Acquire) == MESSAGE
+        channel.state().load(Acquire) == MESSAGE
     }
 
     /// Begins the process of receiving on the channel by reference. If the message is already
@@ -929,7 +919,7 @@ impl<T> Receiver<T> {
         let channel = unsafe { self.channel_ptr.as_ref() };
 
         // ORDERING: synchronize with the write of the message
-        match channel.state.load(Acquire) {
+        match channel.state().load(Acquire) {
             // The sender is alive but has not sent anything yet. We prepare to park.
             EMPTY => {
                 // Conditionally add a delay here to help the tests trigger the edge cases where
@@ -941,13 +931,13 @@ impl<T> Receiver<T> {
                 // Write our waker instance to the channel.
                 // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
                 // try to access the waker until it sees the state set to RECEIVING below
-                unsafe { channel.write_waker(ReceiverWaker::current_thread()) };
+                unsafe { channel.write_waker(waker::ReceiverWaker::current_thread()) };
 
                 // ORDERING: we use release ordering on success so the sender can synchronize with
                 // our write of the waker. We use relaxed ordering on failure since the sender does
                 // not need to synchronize with our write and the individual match arms handle any
                 // additional synchronization
-                match channel.state.swap(RECEIVING, Release) {
+                match channel.state().swap(RECEIVING, Release) {
                     // We stored our waker, now we delegate to the callback to finish the receive
                     // operation
                     EMPTY => finish(channel),
@@ -958,7 +948,7 @@ impl<T> Receiver<T> {
                         unsafe { channel.drop_waker() };
 
                         // ORDERING: Can be relaxed since this only needs to be visible to us (drop)
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state().store(DISCONNECTED, Relaxed);
 
                         // ORDERING: Synchronize with the write of the message and the sender's
                         // final write of the channel state. This branch is unlikely to be taken,
@@ -976,7 +966,7 @@ impl<T> Receiver<T> {
                         unsafe { channel.drop_waker() };
 
                         // ORDERING: Can be relaxed since this only needs to be visible to us (drop)
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state().store(DISCONNECTED, Relaxed);
 
                         // ORDERING: Synchronize with the sender's final write of the channel
                         // state. This branch is unlikely to be taken, so we use a dedicated fence
@@ -992,7 +982,7 @@ impl<T> Receiver<T> {
             MESSAGE => {
                 // ORDERING: the sender has been `mem::forget`-ed so this update only needs to be
                 // visible to us
-                channel.state.store(DISCONNECTED, Relaxed);
+                channel.state().store(DISCONNECTED, Relaxed);
 
                 // SAFETY: we are in the message state so the message is valid
                 Ok(unsafe { channel.take_message() })
@@ -1044,7 +1034,7 @@ impl<T> core::future::Future for Receiver<T> {
 
         // ORDERING: We use relaxed ordering since all branches that need synchronization has
         // their own fences. They are standalone fences to optimize for the EMPTY case
-        match channel.state.load(Relaxed) {
+        match channel.state().load(Relaxed) {
             // The sender is alive but has not sent anything yet.
             EMPTY => {
                 // SAFETY: We can't be in the forbidden states, and no waker in the channel.
@@ -1056,7 +1046,7 @@ impl<T> core::future::Future for Receiver<T> {
                 // written anything above that must be released, and the individual match arms
                 // handle any additional synchronization.
                 match channel
-                    .state
+                    .state()
                     .compare_exchange(RECEIVING, EMPTY, Relaxed, Relaxed)
                 {
                     // We successfully changed the state back to EMPTY. Replace the waker.
@@ -1075,7 +1065,7 @@ impl<T> core::future::Future for Receiver<T> {
                     Err(MESSAGE) => {
                         // ORDERING: the sender has been dropped so this update only needs to be
                         // visible to us
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state().store(DISCONNECTED, Relaxed);
 
                         // ORDERING: Synchronize with the write of the message.
                         fence(Acquire);
@@ -1102,7 +1092,7 @@ impl<T> core::future::Future for Receiver<T> {
             MESSAGE => {
                 // ORDERING: the sender has been dropped so this update only needs to be
                 // visible to us
-                channel.state.store(DISCONNECTED, Relaxed);
+                channel.state().store(DISCONNECTED, Relaxed);
 
                 // ORDERING: Synchronize with the write of the message and the sender's
                 // final write of the channel state. This branch is unlikely to be taken,
@@ -1120,11 +1110,11 @@ impl<T> core::future::Future for Receiver<T> {
             UNPARKING => loop {
                 hint::spin_loop();
                 // ORDERING: The load above has already synchronized with the write of the message.
-                match channel.state.load(Relaxed) {
+                match channel.state().load(Relaxed) {
                     MESSAGE => {
                         // ORDERING: the sender has been dropped, so this update only
                         // needs to be visible to us
-                        channel.state.store(DISCONNECTED, Relaxed);
+                        channel.state().store(DISCONNECTED, Relaxed);
 
                         // ORDERING: Synchronize with the write of the message and the sender's
                         // final write of the channel state. This branch is unlikely to be taken,
@@ -1159,9 +1149,9 @@ impl<T> Drop for Receiver<T> {
         // we are no longer receiving, and then drop the waker. We must first move away from
         // the RECEIVING state in order to not race with the sender around taking the waker.
         #[cfg(feature = "async")]
-        if channel.state.load(Relaxed) == RECEIVING
+        if channel.state().load(Relaxed) == RECEIVING
             && channel
-                .state
+                .state()
                 .compare_exchange(RECEIVING, EMPTY, Relaxed, Relaxed)
                 .is_ok()
         {
@@ -1174,7 +1164,7 @@ impl<T> Drop for Receiver<T> {
         // for deallocating the channel, they can synchronize with this final state swap store from
         // us. Acquire is required by most branches to synchronize with writes in the sender.
         // See each branch for details.
-        match channel.state.swap(DISCONNECTED, AcqRel) {
+        match channel.state().swap(DISCONNECTED, AcqRel) {
             // The sender has not sent anything, nor is it dropped. The sender is responsible for
             // deallocating the channel.
             EMPTY => (),
@@ -1204,7 +1194,7 @@ impl<T> Drop for Receiver<T> {
                     hint::spin_loop();
                     // ORDERING: The state swap above has already synchronized with the write of
                     // the message. Here we only need to observe the actual state change.
-                    match channel.state.load(Relaxed) {
+                    match channel.state().load(Relaxed) {
                         MESSAGE => {
                             // SAFETY: The message state plus acquire ordering from the state swap
                             // at the start of this drop guarantees a message has been written with
@@ -1224,266 +1214,6 @@ impl<T> Drop for Receiver<T> {
                 // SAFETY: Happens-before relationship with the sender's final write of the state
                 // is established with the acquire fence above.
                 unsafe { dealloc(self.channel_ptr) };
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-
-/// Internal channel data structure. The `channel` method allocates and puts one instance
-/// of this struct on the heap for each oneshot channel instance.
-struct Channel<T> {
-    /// The current state of the channel. This is initialized to EMPTY, and always has the value
-    /// of one of the constants in the `states` module. This atomic field is what allows the
-    /// `Sender` and `Receiver` to communicate with each other and coordinate their actions
-    /// in a thread safe manner.
-    state: AtomicU8,
-
-    /// The message in the channel. This memory is uninitialized until the message is sent.
-    ///
-    /// This field is wrapped in an `UnsafeCell` since interior mutability is required.
-    /// Both ends of the channel will access this field mutably through a shared reference.
-    message: UnsafeCell<MaybeUninit<T>>,
-
-    /// The waker instance for the thread or task that is currently receiving on this channel.
-    /// This memory is uninitialized until the receiver starts receiving.
-    ///
-    /// This field is wrapped in an `UnsafeCell` since interior mutability is required.
-    /// Both ends of the channel will access this field mutably through a shared reference.
-    waker: UnsafeCell<MaybeUninit<ReceiverWaker>>,
-}
-
-impl<T> Channel<T> {
-    pub fn new() -> Self {
-        Self {
-            state: AtomicU8::new(EMPTY),
-            message: UnsafeCell::new(MaybeUninit::uninit()),
-            waker: UnsafeCell::new(MaybeUninit::uninit()),
-        }
-    }
-
-    /// Returns a reference to the message
-    ///
-    /// # Safety
-    ///
-    /// Must be called only when the caller can guarantee the message has been initialized, and
-    /// no other thread will access the message field for the lifetime of the returned reference.
-    #[inline(always)]
-    unsafe fn message(&self) -> &T {
-        // SAFETY: The caller guarantees that no other thread will access the message field.
-        let message_container = unsafe {
-            #[cfg(oneshot_loom)]
-            {
-                self.message.with(|ptr| &*ptr)
-            }
-
-            #[cfg(not(oneshot_loom))]
-            {
-                &*self.message.get()
-            }
-        };
-
-        // SAFETY: The caller guarantees that the message has been initialized.
-        unsafe { message_container.assume_init_ref() }
-    }
-
-    /// Runs a closure with mutable access to the message field in the channel.
-    ///
-    /// # Safety
-    ///
-    /// This uses interior mutability to provide mutable access via a shared reference to
-    /// the channel. As a result, the caller must guarantee exclusive access to the message
-    /// field during this call.
-    #[inline(always)]
-    unsafe fn with_message_mut<F>(&self, op: F)
-    where
-        F: FnOnce(&mut MaybeUninit<T>),
-    {
-        // SAFETY: The caller guarantees exclusive access to the message field.
-        #[cfg(oneshot_loom)]
-        unsafe {
-            self.message.with_mut(|ptr| op(&mut *ptr))
-        }
-
-        // SAFETY: The caller guarantees exclusive access to the message field.
-        #[cfg(not(oneshot_loom))]
-        op(unsafe { &mut *self.message.get() })
-    }
-
-    /// Runs a closure with mutable access to the waker field in the channel.
-    ///
-    /// # Safety
-    ///
-    /// This uses interior mutability to provide mutable access via a shared reference to
-    /// the channel. As a result, the caller must guarantee exclusive access to the waker
-    /// field during this call.
-    #[inline(always)]
-    #[cfg(any(feature = "std", feature = "async"))]
-    unsafe fn with_waker_mut<F>(&self, op: F)
-    where
-        F: FnOnce(&mut MaybeUninit<ReceiverWaker>),
-    {
-        #[cfg(oneshot_loom)]
-        {
-            // SAFETY: The caller guarantees exclusive access to the waker field.
-            self.waker.with_mut(|ptr| op(unsafe { &mut *ptr }))
-        }
-
-        #[cfg(not(oneshot_loom))]
-        {
-            // SAFETY: The caller guarantees exclusive access to the waker field.
-            op(unsafe { &mut *self.waker.get() })
-        }
-    }
-
-    /// Writes a message to the message field in the channel. Will overwrite whatever
-    /// is currently stored in the field. To avoid potential memory leaks, the caller
-    /// should ensure that the waker field does not currently have any initialized
-    /// waker in it before calling this function.
-    ///
-    /// # Safety
-    ///
-    /// Caller must guarantee exclusive access to the message field during this call.
-    #[inline(always)]
-    unsafe fn write_message(&self, message: T) {
-        // SAFETY: The caller guarantees exclusive access to the message field.
-        unsafe {
-            self.with_message_mut(|slot| slot.as_mut_ptr().write(message));
-        }
-    }
-
-    /// Reads the message from the channel and returns it.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called after having observed the MESSAGE state with an acquire
-    /// memory ordering to synchronize with the other thread's write of the message.
-    #[inline(always)]
-    unsafe fn take_message(&self) -> T {
-        // SAFETY: The caller guarantees that no other thread will access the message field.
-        let message_container = unsafe {
-            #[cfg(oneshot_loom)]
-            {
-                self.message.with(|ptr| ptr::read(ptr))
-            }
-            #[cfg(not(oneshot_loom))]
-            {
-                ptr::read(self.message.get())
-            }
-        };
-
-        // SAFETY: The caller guarantees that the message has been initialized.
-        unsafe { message_container.assume_init() }
-    }
-
-    /// # Safety
-    ///
-    /// Must only be called after having observed the MESSAGE state with an acquire
-    /// memory ordering to synchronize with the other thread's write of the message.
-    #[inline(always)]
-    unsafe fn drop_message(&self) {
-        // SAFETY: The caller guarantees that the message has been initialized and that
-        // we have exclusive access for the duration of this call.
-        unsafe {
-            self.with_message_mut(|slot| slot.assume_init_drop());
-        }
-    }
-
-    /// Writes a waker to the waker field in the channel. Will overwrite whatever
-    /// is currently stored in the field. To avoid potential memory leaks, the caller
-    /// should ensure that the waker field does not currently have any initialized
-    /// waker in it before calling this function.
-    ///
-    /// # Safety
-    ///
-    /// Caller must guarantee exclusive access to the waker field during this call.
-    #[cfg(any(feature = "std", feature = "async"))]
-    #[inline(always)]
-    unsafe fn write_waker(&self, waker: ReceiverWaker) {
-        // SAFETY: The caller guarantees exclusive access to the waker field.
-        unsafe { self.with_waker_mut(|slot| slot.as_mut_ptr().write(waker)) };
-    }
-
-    /// # Safety
-    ///
-    /// Must be called only when the caller can guarantee the waker has been initialized (and
-    /// not already dropped), and no other thread will access the waker field during this call.
-    #[inline(always)]
-    unsafe fn take_waker(&self) -> ReceiverWaker {
-        // SAFETY: The caller guarantees that a waker has been initialized, and
-        // that no other thread will access the waker field during this call.
-        unsafe {
-            #[cfg(oneshot_loom)]
-            {
-                self.waker.with(|ptr| ptr::read(ptr)).assume_init()
-            }
-
-            #[cfg(not(oneshot_loom))]
-            {
-                ptr::read(self.waker.get()).assume_init()
-            }
-        }
-    }
-
-    /// Runs the `Drop` implementation on the channel waker.
-    ///
-    /// # Safety
-    ///
-    /// Must be called only when the caller can guarantee the waker has been initialized (and
-    /// not already dropped), and no other thread will access the waker field during this call.
-    #[cfg(any(feature = "std", feature = "async"))]
-    #[inline(always)]
-    unsafe fn drop_waker(&self) {
-        // SAFETY: The caller guarantees that a waker has been initialized, and that
-        // we have exclusive access while this method runs.
-        unsafe { self.with_waker_mut(|slot| slot.assume_init_drop()) };
-    }
-
-    /// # Safety
-    ///
-    /// * `Channel::waker` must not have a waker stored in it when calling this method.
-    /// * Channel state must not be RECEIVING or UNPARKING when calling this method.
-    #[cfg(feature = "async")]
-    unsafe fn write_async_waker(&self, cx: &mut task::Context<'_>) -> Poll<Result<T, RecvError>> {
-        // SAFETY: we are not yet in the RECEIVING state, meaning that the sender will not
-        // try to access the waker until it sees the state set to RECEIVING below
-        unsafe { self.write_waker(ReceiverWaker::task_waker(cx)) };
-
-        // ORDERING: we use release ordering on success so the sender can synchronize with
-        // our write of the waker. We use relaxed ordering on failure since the sender does
-        // not need to synchronize with our write and the individual match arms handle any
-        // additional synchronization
-        match self
-            .state
-            .compare_exchange(EMPTY, RECEIVING, Release, Relaxed)
-        {
-            // We stored our waker, now we return and let the sender wake us up
-            Ok(_) => Poll::Pending,
-            // The sender sent the message while we prepared to park.
-            // We take the message and mark the channel disconnected.
-            Err(MESSAGE) => {
-                // SAFETY: We wrote a waker above. The sender cannot have observed the
-                // RECEIVING state, so it has not accessed the waker. We must drop it.
-                unsafe { self.drop_waker() };
-
-                // ORDERING: sender does not exist, so this update only needs to be visible to us
-                self.state.store(DISCONNECTED, Relaxed);
-
-                // ORDERING: Synchronize with the write of the message. This branch is
-                // unlikely to be taken, so it's likely more efficient to use a fence here
-                // instead of AcqRel ordering on the compare_exchange operation
-                fence(Acquire);
-
-                // SAFETY: The MESSAGE state + acquire ordering guarantees initialized message
-                Poll::Ready(Ok(unsafe { self.take_message() }))
-            }
-            // The sender was dropped before sending anything while we prepared to park.
-            Err(DISCONNECTED) => {
-                // SAFETY: We wrote a waker above. The sender cannot have observed the
-                // RECEIVING state, so it has not accessed the waker. We must drop it.
-                unsafe { self.drop_waker() };
-
-                Poll::Ready(Err(RecvError))
             }
             _ => unreachable!(),
         }
