@@ -1259,14 +1259,25 @@ mod states {
 use states::*;
 
 /// Internal channel data structure. The `channel` method allocates and puts one instance
-/// of this struct on the heap for each oneshot channel instance. The struct holds:
-/// * The current state of the channel.
-/// * The message in the channel. This memory is uninitialized until the message is sent.
-/// * The waker instance for the thread or task that is currently receiving on this channel.
-///   This memory is uninitialized until the receiver starts receiving.
+/// of this struct on the heap for each oneshot channel instance.
 struct Channel<T> {
+    /// The current state of the channel. This is initialized to EMPTY, and always has the value
+    /// of one of the constants in the `states` module. This atomic field is what allows the
+    /// `Sender` and `Receiver` to communicate with each other and coordinate their actions
+    /// in a thread safe manner.
     state: AtomicU8,
+
+    /// The message in the channel. This memory is uninitialized until the message is sent.
+    ///
+    /// This field is wrapped in an `UnsafeCell` since interior mutability is required.
+    /// Both ends of the channel will access this field mutably through a shared reference.
     message: UnsafeCell<MaybeUninit<T>>,
+
+    /// The waker instance for the thread or task that is currently receiving on this channel.
+    /// This memory is uninitialized until the receiver starts receiving.
+    ///
+    /// This field is wrapped in an `UnsafeCell` since interior mutability is required.
+    /// Both ends of the channel will access this field mutably through a shared reference.
     waker: UnsafeCell<MaybeUninit<ReceiverWaker>>,
 }
 
