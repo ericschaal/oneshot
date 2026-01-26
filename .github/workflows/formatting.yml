@@ -4,19 +4,20 @@ on:
   pull_request:
     paths:
       - .github/workflows/*.yml
-      - '**/*.rs'
+      - "**/*.rs"
   workflow_dispatch:
+
+permissions: {}
+
 jobs:
   check-formatting:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions-rs/toolchain@v1.0.6
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
           components: rustfmt
-          override: true
 
       - name: Check formatting
         run: |

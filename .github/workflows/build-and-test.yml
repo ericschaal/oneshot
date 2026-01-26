@@ -12,6 +12,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "--deny warnings "
+
+permissions: {}
+
 jobs:
   build-and-test:
     strategy:
@@ -28,22 +31,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - uses: actions-rs/toolchain@v1.0.6
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-          default: true
 
       - name: Install cargo-hack
         uses: taiki-e/install-action@cargo-hack
 
       - name: Build
         shell: bash
-        run: cargo build --locked
+        run: cargo hack --feature-powerset --exclude-all-features build --locked
 
       # Run through all tests with all combinations of features
       - name: Test
         shell: bash
-        run: cargo hack --feature-powerset --exclude-all-features test
+        run: cargo hack --feature-powerset --exclude-all-features test --locked
 
       # Run `cargo test` but with artificial delay injected into some code paths. This helps
       # running through some hard-to-time code paths. loom testing is not included since it is not
@@ -71,11 +73,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Miri
-        run: |
-          rustup toolchain install nightly --component miri
-          rustup override set nightly
-          cargo miri setup
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - name: Setup Miri
+        run: cargo miri setup
 
       - name: Test with Miri
         run: |
