@@ -47,9 +47,27 @@ async-std = { version = "1", features = ["attributes"] }
 [target.'cfg(criterion)'.dev-dependencies]
 criterion = "0.5.1"
 
+[lints.clippy]
+allow_attributes = "warn"
+as_ptr_cast_mut = "warn"
+as_underscore = "warn"
+borrow_as_ptr = "warn"
+implicit_clone = "warn"
+#undocumented_unsafe_blocks = "warn"
+unicode_not_nfc = "warn"
+unused_async = "deny"
+wildcard_dependencies = "deny"
 
 [lints.rust]
 unexpected_cfgs = { level = "deny", check-cfg = ['cfg(oneshot_loom)', 'cfg(oneshot_test_delay)', 'cfg(criterion)'] }
+absolute_paths_not_starting_with_crate = "deny"
+explicit_outlives_requirements = "warn"
+macro_use_extern_crate = "deny"
+missing_abi = "deny"
+non_ascii_idents = "forbid"
+single_use_lifetimes = "warn"
+unused_lifetimes = "warn"
+unused_macro_rules = "warn"
 
 [[bench]]
 name = "benches"
