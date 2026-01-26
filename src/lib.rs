@@ -253,6 +253,10 @@ pub struct Receiver<T> {
     channel_ptr: NonNull<Channel<T>>,
 }
 
+// SAFETY: The core functionality of this library is to be able to pass channel ends to different
+// threads to then be able to pass messages between threads or tasks.
+// The sender only contains a pointer to the channel, and the entire library revolves around
+// making sure the access to that channel object is properly synchronized
 unsafe impl<T: Send> Send for Sender<T> {}
 
 // SAFETY: The only methods that assumes there is only a single reference to the sender
@@ -260,7 +264,15 @@ unsafe impl<T: Send> Send for Sender<T> {}
 // the time it is called.
 unsafe impl<T: Sync> Sync for Sender<T> {}
 
+// SAFETY: The core functionality of this library is to be able to pass channel ends to different
+// threads to then be able to pass messages between threads or tasks.
+// The receiver only contains a pointer to the channel, and the entire library revolves around
+// making sure the access to that channel object is properly synchronized
 unsafe impl<T: Send> Send for Receiver<T> {}
+
+// The Receiver can NOT be `Sync`! The current receive implementations that take `&self`
+// assume no other receive operation runs in parallel.
+
 impl<T> Unpin for Receiver<T> {}
 
 impl<T> Sender<T> {
@@ -396,11 +408,11 @@ impl<T> Sender<T> {
     /// At most one Sender must exist for a channel at any point in time.
     /// Constructing multiple Senders from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        unsafe {
-            Self {
-                channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
-                _invariant: PhantomData,
-            }
+        // SAFETY: Method guarantee that the pointer is valid and points to a Channel<T>.
+        let channel_ptr = unsafe { NonNull::new_unchecked(raw as *mut Channel<T>) };
+        Self {
+            channel_ptr,
+            _invariant: PhantomData,
         }
     }
 }
@@ -1022,11 +1034,9 @@ impl<T> Receiver<T> {
     /// At most one Receiver must exist for a channel at any point in time.
     /// Constructing multiple Receivers from the same raw pointer leads to undefined behavior.
     pub unsafe fn from_raw(raw: *mut ()) -> Self {
-        unsafe {
-            Self {
-                channel_ptr: NonNull::new_unchecked(raw as *mut Channel<T>),
-            }
-        }
+        // SAFETY: Method guarantee that the pointer is valid and points to a Channel<T>.
+        let channel_ptr = unsafe { NonNull::new_unchecked(raw as *mut Channel<T>) };
+        Self { channel_ptr }
     }
 }
 
@@ -1252,14 +1262,25 @@ mod states {
 use states::*;
 
 /// Internal channel data structure. The `channel` method allocates and puts one instance
-/// of this struct on the heap for each oneshot channel instance. The struct holds:
-/// * The current state of the channel.
-/// * The message in the channel. This memory is uninitialized until the message is sent.
-/// * The waker instance for the thread or task that is currently receiving on this channel.
-///   This memory is uninitialized until the receiver starts receiving.
+/// of this struct on the heap for each oneshot channel instance.
 struct Channel<T> {
+    /// The current state of the channel. This is initialized to EMPTY, and always has the value
+    /// of one of the constants in the `states` module. This atomic field is what allows the
+    /// `Sender` and `Receiver` to communicate with each other and coordinate their actions
+    /// in a thread safe manner.
     state: AtomicU8,
+
+    /// The message in the channel. This memory is uninitialized until the message is sent.
+    ///
+    /// This field is wrapped in an `UnsafeCell` since interior mutability is required.
+    /// Both ends of the channel will access this field mutably through a shared reference.
     message: UnsafeCell<MaybeUninit<T>>,
+
+    /// The waker instance for the thread or task that is currently receiving on this channel.
+    /// This memory is uninitialized until the receiver starts receiving.
+    ///
+    /// This field is wrapped in an `UnsafeCell` since interior mutability is required.
+    /// Both ends of the channel will access this field mutably through a shared reference.
     waker: UnsafeCell<MaybeUninit<ReceiverWaker>>,
 }
 
@@ -1272,9 +1293,16 @@ impl<T> Channel<T> {
         }
     }
 
+    /// Returns a reference to the message
+    ///
+    /// # Safety
+    ///
+    /// Must be called only when the caller can guarantee the message has been initialized, and
+    /// no other thread will access the message field for the lifetime of the returned reference.
     #[inline(always)]
-    unsafe fn message(&self) -> &MaybeUninit<T> {
-        unsafe {
+    unsafe fn message(&self) -> &T {
+        // SAFETY: The caller guarantees that no other thread will access the message field.
+        let message_container = unsafe {
             #[cfg(oneshot_loom)]
             {
                 self.message.with(|ptr| &*ptr)
@@ -1284,25 +1312,42 @@ impl<T> Channel<T> {
             {
                 &*self.message.get()
             }
-        }
+        };
+
+        // SAFETY: The caller guarantees that the message has been initialized.
+        unsafe { message_container.assume_init_ref() }
     }
 
+    /// Runs a closure with mutable access to the message field in the channel.
+    ///
+    /// # Safety
+    ///
+    /// This uses interior mutability to provide mutable access via a shared reference to
+    /// the channel. As a result, the caller must guarantee exclusive access to the message
+    /// field during this call.
     #[inline(always)]
     unsafe fn with_message_mut<F>(&self, op: F)
     where
         F: FnOnce(&mut MaybeUninit<T>),
     {
+        // SAFETY: The caller guarantees exclusive access to the message field.
         #[cfg(oneshot_loom)]
         unsafe {
             self.message.with_mut(|ptr| op(&mut *ptr))
         }
 
+        // SAFETY: The caller guarantees exclusive access to the message field.
         #[cfg(not(oneshot_loom))]
-        unsafe {
-            op(&mut *self.message.get())
-        }
+        op(unsafe { &mut *self.message.get() })
     }
 
+    /// Runs a closure with mutable access to the waker field in the channel.
+    ///
+    /// # Safety
+    ///
+    /// This uses interior mutability to provide mutable access via a shared reference to
+    /// the channel. As a result, the caller must guarantee exclusive access to the waker
+    /// field during this call.
     #[inline(always)]
     #[cfg(any(feature = "std", feature = "async"))]
     unsafe fn with_waker_mut<F>(&self, op: F)
@@ -1311,37 +1356,55 @@ impl<T> Channel<T> {
     {
         #[cfg(oneshot_loom)]
         {
+            // SAFETY: The caller guarantees exclusive access to the waker field.
             self.waker.with_mut(|ptr| op(unsafe { &mut *ptr }))
         }
 
         #[cfg(not(oneshot_loom))]
         {
+            // SAFETY: The caller guarantees exclusive access to the waker field.
             op(unsafe { &mut *self.waker.get() })
         }
     }
 
+    /// Writes a message to the message field in the channel. Will overwrite whatever
+    /// is currently stored in the field. To avoid potential memory leaks, the caller
+    /// should ensure that the waker field does not currently have any initialized
+    /// waker in it before calling this function.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee exclusive access to the message field during this call.
     #[inline(always)]
     unsafe fn write_message(&self, message: T) {
+        // SAFETY: The caller guarantees exclusive access to the message field.
         unsafe {
             self.with_message_mut(|slot| slot.as_mut_ptr().write(message));
         }
     }
 
+    /// Reads the message from the channel and returns it.
+    ///
     /// # Safety
     ///
     /// Must only be called after having observed the MESSAGE state with an acquire
     /// memory ordering to synchronize with the other thread's write of the message.
     #[inline(always)]
     unsafe fn take_message(&self) -> T {
-        #[cfg(oneshot_loom)]
-        unsafe {
-            self.message.with(|ptr| ptr::read(ptr)).assume_init()
-        }
+        // SAFETY: The caller guarantees that no other thread will access the message field.
+        let message_container = unsafe {
+            #[cfg(oneshot_loom)]
+            {
+                self.message.with(|ptr| ptr::read(ptr))
+            }
+            #[cfg(not(oneshot_loom))]
+            {
+                ptr::read(self.message.get())
+            }
+        };
 
-        #[cfg(not(oneshot_loom))]
-        unsafe {
-            ptr::read(self.message.get()).assume_init()
-        }
+        // SAFETY: The caller guarantees that the message has been initialized.
+        unsafe { message_container.assume_init() }
     }
 
     /// # Safety
@@ -1350,37 +1413,60 @@ impl<T> Channel<T> {
     /// memory ordering to synchronize with the other thread's write of the message.
     #[inline(always)]
     unsafe fn drop_message(&self) {
+        // SAFETY: The caller guarantees that the message has been initialized and that
+        // we have exclusive access for the duration of this call.
         unsafe {
             self.with_message_mut(|slot| slot.assume_init_drop());
         }
     }
 
+    /// Writes a waker to the waker field in the channel. Will overwrite whatever
+    /// is currently stored in the field. To avoid potential memory leaks, the caller
+    /// should ensure that the waker field does not currently have any initialized
+    /// waker in it before calling this function.
+    ///
+    /// # Safety
+    ///
+    /// Caller must guarantee exclusive access to the waker field during this call.
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn write_waker(&self, waker: ReceiverWaker) {
+        // SAFETY: The caller guarantees exclusive access to the waker field.
         unsafe { self.with_waker_mut(|slot| slot.as_mut_ptr().write(waker)) };
     }
 
     /// # Safety
     ///
-    /// Must only be called after having observed the RECEIVING state with
-    /// acquire memory ordering and then transitioned into the UNPARKING state.
+    /// Must be called only when the caller can guarantee the waker has been initialized (and
+    /// not already dropped), and no other thread will access the waker field during this call.
     #[inline(always)]
     unsafe fn take_waker(&self) -> ReceiverWaker {
-        #[cfg(oneshot_loom)]
+        // SAFETY: The caller guarantees that a waker has been initialized, and
+        // that no other thread will access the waker field during this call.
         unsafe {
-            self.waker.with(|ptr| ptr::read(ptr)).assume_init()
-        }
+            #[cfg(oneshot_loom)]
+            {
+                self.waker.with(|ptr| ptr::read(ptr)).assume_init()
+            }
 
-        #[cfg(not(oneshot_loom))]
-        unsafe {
-            ptr::read(self.waker.get()).assume_init()
+            #[cfg(not(oneshot_loom))]
+            {
+                ptr::read(self.waker.get()).assume_init()
+            }
         }
     }
 
+    /// Runs the `Drop` implementation on the channel waker.
+    ///
+    /// # Safety
+    ///
+    /// Must be called only when the caller can guarantee the waker has been initialized (and
+    /// not already dropped), and no other thread will access the waker field during this call.
     #[cfg(any(feature = "std", feature = "async"))]
     #[inline(always)]
     unsafe fn drop_waker(&self) {
+        // SAFETY: The caller guarantees that a waker has been initialized, and that
+        // we have exclusive access while this method runs.
         unsafe { self.with_waker_mut(|slot| slot.assume_init_drop()) };
     }
 
@@ -1487,13 +1573,18 @@ fn receiver_waker_size() {
 const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
     "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";
 
+/// Deallocates the channel's heap allocation (created in `oneshot::channel()`).
+///
 /// # Safety
-/// * `channel` must be a valid pointer to a `Channel<T>`.
-/// * The loading of `channel.state` in this thread that determined we are responsible for
-///   freeing the channel must synchronize with the other sides' writing of that state.
-///   This means our load must have acquire ordering or stronger, and their store must have
-///   release ordering or stronger.
+///
+/// * `channel` must be a valid pointer to a `Channel<T>` originally coming from
+///   `oneshot::channel()`.
+/// * The thread calling this function must have properly synchronized with any other thread
+///   that has used the channel (either the `Sender` or `Receiver`). This means having an
+///   acquire memory barrier on or after the loading of `channel.state` that determined that
+///   the other thread is fully done using the channel and we are responsible for freeing it.
 #[inline]
 pub(crate) unsafe fn dealloc<T>(channel: NonNull<Channel<T>>) {
-    unsafe { drop(Box::from_raw(channel.as_ptr())) }
+    // SAFETY: Method guarantee that the pointer is valid and points to a Channel<T>.
+    drop(unsafe { Box::from_raw(channel.as_ptr()) });
 }

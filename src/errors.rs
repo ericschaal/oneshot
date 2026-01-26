@@ -12,7 +12,15 @@ pub struct SendError<T> {
     channel_ptr: NonNull<Channel<T>>,
 }
 
+// SAFETY: The SendError only contains a pointer to the channel. The constructor (if used
+// correctly) guarantees exclusive ownership and access to the underlying channel. Since
+// the message is Send (`T: Send`) it is safe to extract it or drop it via the SendError
+// on any thread.
 unsafe impl<T: Send> Send for SendError<T> {}
+
+// SAFETY: Same basic safety as described in the Send impl above. Plus the fact that `T`
+// is `Sync` allows the SendError to be shared between threads and hand out `&T` references
+// as well.
 unsafe impl<T: Sync> Sync for SendError<T> {}
 
 impl<T> SendError<T> {
@@ -53,20 +61,19 @@ impl<T> SendError<T> {
     /// Get a reference to the message that failed to be sent.
     #[inline]
     pub fn as_inner(&self) -> &T {
-        // SAFETY: * `channel_ptr.as_ref() - We have ownership of the channel.
-        // * The message has been initialized
-        unsafe { self.channel_ptr.as_ref().message().assume_init_ref() }
+        // SAFETY: we have exclusive ownership of the channel and require that the message has
+        // been initialized upon construction.
+        unsafe { self.channel_ptr.as_ref().message() }
     }
 }
 
 impl<T> Drop for SendError<T> {
     fn drop(&mut self) {
-        // SAFETY: we have ownership of the channel and require that the message is initialized
-        // upon construction
-        unsafe {
-            self.channel_ptr.as_ref().drop_message();
-            dealloc(self.channel_ptr);
-        }
+        // SAFETY: SendError::new guarantees there in a properly initialized message
+        unsafe { self.channel_ptr.as_ref().drop_message() };
+
+        // SAFETY: SendError::new guarantees we own the channel
+        unsafe { dealloc(self.channel_ptr) };
     }
 }
 

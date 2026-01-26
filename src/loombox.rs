@@ -9,6 +9,7 @@ impl<T> Box<T> {
     pub fn new(value: T) -> Self {
         let layout = alloc::Layout::new::<T>();
         let ptr = unsafe { alloc::alloc(layout) } as *mut T;
+        assert!(!ptr.is_null(), "allocation failed");
         unsafe { ptr::write(ptr, value) };
         Self { ptr }
     }

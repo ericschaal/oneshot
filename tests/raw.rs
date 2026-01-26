@@ -6,6 +6,7 @@ use oneshot::{Receiver, Sender, channel};
 fn test_raw_sender() {
     let (sender, receiver) = channel::<u32>();
     let raw = sender.into_raw();
+    // SAFETY: `raw` comes from `Sender::into_raw` for the same message type.
     let recreated = unsafe { Sender::<u32>::from_raw(raw) };
     recreated
         .send(100)
@@ -18,6 +19,7 @@ fn test_raw_receiver() {
     let (sender, receiver) = channel::<u32>();
     let raw = receiver.into_raw();
     sender.send(100).unwrap();
+    // SAFETY: `raw` comes from `Sender::into_raw` for the same message type.
     let recreated = unsafe { Receiver::<u32>::from_raw(raw) };
     assert_eq!(
         recreated
@@ -33,9 +35,11 @@ fn test_raw_sender_and_receiver() {
     let raw_receiver = receiver.into_raw();
     let raw_sender = sender.into_raw();
 
+    // SAFETY: `raw_sender` comes from `Sender::into_raw` for the same message type.
     let recreated_sender = unsafe { Sender::<u32>::from_raw(raw_sender) };
     recreated_sender.send(100).unwrap();
 
+    // SAFETY: `raw_receiver` comes from `Receiver::into_raw` for the same message type.
     let recreated_receiver = unsafe { Receiver::<u32>::from_raw(raw_receiver) };
     assert_eq!(
         recreated_receiver
