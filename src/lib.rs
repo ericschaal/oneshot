@@ -10,7 +10,7 @@
 //! The sender's send method is non-blocking, and potentially lock- and wait-free.
 //! See documentation on [Sender::send] for situations where it might not be fully wait-free.
 //! The receiver supports both lock- and wait-free `try_recv` as well as indefinite and time
-//! limited thread blocking receive operations. The receiver also implements `Future` and
+//! limited thread blocking receive operations. The receiver also implements `IntoFuture` and
 //! supports asynchronously awaiting the message.
 //!
 //!
@@ -90,10 +90,10 @@
 //! that should work smoothly between the sync and async parts of the program!
 //!
 //! This library achieves that by having a fast and cheap send operation that can
-//! be used in both sync threads and async tasks. The receiver has both thread blocking
-//! receive methods for synchronous usage, and implements `Future` for asynchronous usage.
+//! be used in both regular threads and async tasks. The receiver has both thread blocking
+//! receive methods for synchronous usage, and implements `IntoFuture` for asynchronous usage.
 //!
-//! The receiving endpoint of this channel implements Rust's `Future` trait and can be waited on
+//! The receiving endpoint of this channel implements Rust's `IntoFuture` trait and can be waited on
 //! in an asynchronous task. This implementation is completely executor/runtime agnostic. It should
 //! be possible to use this library with any executor, or even pass messages between tasks running
 //! in different executors.
@@ -142,6 +142,8 @@ mod sender;
 pub use sender::Sender;
 
 mod receiver;
+#[cfg(feature = "async")]
+pub use receiver::AsyncReceiver;
 pub use receiver::Receiver;
 
 mod states;
@@ -176,6 +178,21 @@ pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
         // SAFETY: The pointer is valid, and we only create a single `Receiver`
         unsafe { Receiver::new(channel_ptr) },
     )
+}
+
+/// Ergonomic shorthand for creating a channel and immediately convert the [`Receiver`] into
+/// a future.
+///
+/// This can be useful when you need to pass the receiver to a function that expects a
+/// type implementing [`Future`] directly. Using this function is not necessary when
+/// you are going to use `.await` on the receiver, as that will automatically call
+/// [`IntoFuture::into_future`] in the background.
+#[cfg(feature = "async")]
+#[inline(always)]
+pub fn async_channel<T>() -> (Sender<T>, AsyncReceiver<T>) {
+    let (sender, receiver) = channel();
+    let async_receiver = core::future::IntoFuture::into_future(receiver);
+    (sender, async_receiver)
 }
 
 /// Deallocates the channel's heap allocation (created in `oneshot::channel()`).

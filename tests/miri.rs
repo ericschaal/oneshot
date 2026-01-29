@@ -143,7 +143,7 @@ fn tx_send_rx_try_recv_then_drop() {
 #[cfg(feature = "async")]
 #[test]
 fn tx_send_rx_poll_to_completion() {
-    let (tx, rx) = oneshot::channel::<i32>();
+    let (tx, rx) = oneshot::async_channel::<i32>();
 
     let rx_thread = spawn_named("rx_thread", move || {
         let mut rx = pin!(rx);
@@ -168,7 +168,7 @@ fn tx_send_rx_poll_to_completion() {
 #[cfg(feature = "async")]
 #[test]
 fn tx_send_rx_poll_then_drop() {
-    let (tx, rx) = oneshot::channel::<i32>();
+    let (tx, rx) = oneshot::async_channel::<i32>();
 
     let rx_thread = spawn_named("rx_thread", move || {
         let mut rx = pin!(rx);
@@ -305,7 +305,7 @@ fn tx_drop_rx_try_recv_then_drop() {
 #[cfg(feature = "async")]
 #[test]
 fn tx_drop_rx_poll_to_completion() {
-    let (tx, rx) = oneshot::channel::<i32>();
+    let (tx, rx) = oneshot::async_channel::<i32>();
 
     let rx_thread = spawn_named("rx_thread", move || {
         let mut rx = pin!(rx);
@@ -330,7 +330,7 @@ fn tx_drop_rx_poll_to_completion() {
 #[cfg(feature = "async")]
 #[test]
 fn tx_drop_rx_poll_then_drop() {
-    let (tx, rx) = oneshot::channel::<i32>();
+    let (tx, rx) = oneshot::async_channel::<i32>();
 
     let rx_thread = spawn_named("rx_thread", move || {
         let mut rx = pin!(rx);

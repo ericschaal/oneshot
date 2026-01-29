@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   This makes the library more minimal by default and only contains the functionality that the
   user explicitly enables. This is a breaking change.
 - Upgrade to Rust 2024 edition. This also bumps the MSRV to 1.85.0
+- Add a separate type `AsyncReceiver` that implements `Future` instead of implementing it
+  directly on the `Receiver` type. Now the `Receiver` implements `IntoFuture` instead.
+  This is a breaking change. This change removes the possible panics in many recv* methods,
+  and it simplifies some code a bit.
 
 ### Fixed
 - Make Debug impl on SendError include the channel message type, instead of just saying

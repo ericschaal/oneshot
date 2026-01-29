@@ -1,8 +1,8 @@
 use core::{mem, ptr::NonNull};
 
-#[cfg(all(any(feature = "std", feature = "async"), not(oneshot_loom)))]
+#[cfg(all(feature = "async", not(oneshot_loom)))]
 use core::hint;
-#[cfg(all(any(feature = "std", feature = "async"), oneshot_loom))]
+#[cfg(all(feature = "async", oneshot_loom))]
 use loom::hint;
 
 #[cfg(feature = "async")]
@@ -37,10 +37,24 @@ use crate::waker::ReceiverWaker;
 /// Can be used to receive a message from the corresponding [`Sender`](crate::Sender). How the message
 /// can be received depends on what features are enabled.
 ///
-/// This type implement [`IntoFuture`] when the `async` feature is enabled.
+/// This type implements [`IntoFuture`](core::future::IntoFuture) when the `async` feature is enabled.
 /// This allows awaiting it directly in an async context.
 #[derive(Debug)]
 pub struct Receiver<T> {
+    // Covariance is the right choice here. Consider the example presented in Sender, and you'll
+    // see that if we replaced `rx` instead then we would get the expected behavior
+    channel_ptr: NonNull<Channel<T>>,
+}
+
+/// A version of [`Receiver`] that implements [`Future`](core::future::Future), for awaiting the
+/// message in an async context.
+///
+/// This type is automatically created and polled in the background when awaiting a [`Receiver`].
+/// But it can also be created explicitly with the [`async_channel`](crate::async_channel) function or by calling
+/// [`IntoFuture::into_future`](core::future::IntoFuture::into_future) on the [`Receiver`].
+#[cfg(feature = "async")]
+#[derive(Debug)]
+pub struct AsyncReceiver<T> {
     // Covariance is the right choice here. Consider the example presented in Sender, and you'll
     // see that if we replaced `rx` instead then we would get the expected behavior
     channel_ptr: NonNull<Channel<T>>,
@@ -56,6 +70,12 @@ unsafe impl<T: Send> Send for Receiver<T> {}
 // assume no other receive operation runs in parallel.
 
 impl<T> Unpin for Receiver<T> {}
+
+// SAFETY: See documentation on Send impl on Receiver.
+#[cfg(feature = "async")]
+unsafe impl<T: Send> Send for AsyncReceiver<T> {}
+#[cfg(feature = "async")]
+impl<T> Unpin for AsyncReceiver<T> {}
 
 impl<T> Receiver<T> {
     /// # Safety
@@ -104,8 +124,6 @@ impl<T> Receiver<T> {
             }
             EMPTY => Err(TryRecvError::Empty),
             DISCONNECTED => Err(TryRecvError::Disconnected),
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => Err(TryRecvError::Empty),
             _ => unreachable!(),
         }
     }
@@ -123,10 +141,6 @@ impl<T> Receiver<T> {
     ///
     /// If a sent message has already been extracted from this channel this method will return an
     /// error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv(self) -> Result<T, RecvError> {
         // Note that we don't need to worry about changing the state to disconnected or setting the
@@ -277,9 +291,6 @@ impl<T> Receiver<T> {
 
                 Err(RecvError)
             }
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -291,10 +302,6 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_ref(&self) -> Result<T, RecvError> {
         self.start_recv_ref(RecvError, |channel| {
@@ -335,10 +342,6 @@ impl<T> Receiver<T> {
     ///
     /// If the supplied `timeout` is so large that Rust's `Instant` type can't represent this point
     /// in the future this falls back to an indefinitely blocking receive operation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         match Instant::now().checked_add(timeout) {
@@ -355,10 +358,6 @@ impl<T> Receiver<T> {
     ///
     /// If a message is returned, the channel is disconnected and any subsequent receive operation
     /// using this receiver will return an error.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after this receiver has been polled asynchronously.
     #[cfg(feature = "std")]
     pub fn recv_deadline(&self, deadline: Instant) -> Result<T, RecvTimeoutError> {
         /// # Safety
@@ -588,9 +587,6 @@ impl<T> Receiver<T> {
             }
             // The sender was dropped before sending anything, or we already received the message.
             DISCONNECTED => Err(disconnected_error),
-            // The receiver must have been `Future::poll`ed prior to this call.
-            #[cfg(feature = "async")]
-            RECEIVING | UNPARKING => panic!("{}", RECEIVER_USED_SYNC_AND_ASYNC_ERROR),
             _ => unreachable!(),
         }
     }
@@ -621,7 +617,23 @@ impl<T> Receiver<T> {
 }
 
 #[cfg(feature = "async")]
-impl<T> core::future::Future for Receiver<T> {
+impl<T> core::future::IntoFuture for Receiver<T> {
+    type Output = Result<T, RecvError>;
+    type IntoFuture = AsyncReceiver<T>;
+
+    #[inline(always)]
+    fn into_future(self) -> Self::IntoFuture {
+        let Receiver { channel_ptr } = self;
+
+        // Don't run our Drop implementation, since the receiver lives on as an async receiver.
+        mem::forget(self);
+
+        AsyncReceiver { channel_ptr }
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T> core::future::Future for AsyncReceiver<T> {
     type Output = Result<T, RecvError>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
@@ -743,11 +755,47 @@ impl<T> Drop for Receiver<T> {
         // that signal to the sender to deallocate the channel. So the channel pointer is valid
         let channel = unsafe { self.channel_ptr.as_ref() };
 
+        // Set the channel state to disconnected and read what state the channel was in
+        // ORDERING: Release is required so that in the states where the sender becomes responsible
+        // for deallocating the channel, they can synchronize with this final state swap store from
+        // us. Acquire is required by most branches to synchronize with writes in the sender.
+        // See each branch for details.
+        match channel.state().swap(DISCONNECTED, AcqRel) {
+            // The sender has not sent anything, nor is it dropped. The sender is responsible for
+            // deallocating the channel.
+            EMPTY => (),
+            // The sender already sent something. We must drop the message, and free the channel.
+            MESSAGE => {
+                // SAFETY: The MESSAGE state plus acquire ordering guarantees the sender has
+                // written a message and that it has a happens-before relationship with this drop.
+                unsafe { channel.drop_message() };
+
+                // SAFETY: The acquire ordering of the swap above synchronize with the sender's
+                // final write of the state. So we can safely deallocate it.
+                unsafe { dealloc(self.channel_ptr) };
+            }
+            // The sender was already dropped. We are responsible for freeing the channel.
+            DISCONNECTED => {
+                // SAFETY: The acquire ordering of the swap above synchronize with the sender's
+                // final write of the state. So we can safely deallocate it.
+                unsafe { dealloc(self.channel_ptr) };
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[cfg(feature = "async")]
+impl<T> Drop for AsyncReceiver<T> {
+    fn drop(&mut self) {
+        // SAFETY: since the receiving side is still alive the sender would have observed that and
+        // left deallocating the channel allocation to us.
+        let channel = unsafe { self.channel_ptr.as_ref() };
+
         // If this receiver was previously polled, but was not polled to completion, then the
         // channel is in the RECEIVING state and with a waker written. We must tell the sender
         // we are no longer receiving, and then drop the waker. We must first move away from
         // the RECEIVING state in order to not race with the sender around taking the waker.
-        #[cfg(feature = "async")]
         if channel.state().load(Relaxed) == RECEIVING
             && channel
                 .state()
@@ -787,7 +835,6 @@ impl<T> Drop for Receiver<T> {
             // state. But the sender has observed the RECEIVING state and is currently reading the
             // waker to wake us up. We need to loop here until we observe the MESSAGE or
             // DISCONNECTED state. We busy loop here since we know the sender is done very soon.
-            #[cfg(any(feature = "std", feature = "async"))]
             UNPARKING => {
                 loop {
                     hint::spin_loop();
@@ -818,7 +865,3 @@ impl<T> Drop for Receiver<T> {
         }
     }
 }
-
-#[cfg(all(feature = "std", feature = "async"))]
-const RECEIVER_USED_SYNC_AND_ASYNC_ERROR: &str =
-    "Invalid to call a blocking receive method on oneshot::Receiver after it has been polled";

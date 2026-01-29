@@ -25,7 +25,7 @@ rust-version = "1.85.0"
 
 # Enables usage of libstd. Adds support for thread blocking receive methods.
 std = []
-# Enables async receiving by implementing Future
+# Enables async receiving via the AsyncReceiver receiver
 async = []
 
 # Only used for internal correctness testing.
