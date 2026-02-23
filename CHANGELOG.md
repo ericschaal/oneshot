@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   user explicitly enables. This is a breaking change.
 - Upgrade to Rust 2024 edition. This also bumps the MSRV to 1.85.0
 
+### Fixed
+- Make Debug impl on SendError include the channel message type, instead of just saying
+  `"SendError<T>(_)"`.
+
 
 ## [0.1.12] - 2026-01-25
 ### Fixed

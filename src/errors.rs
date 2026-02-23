@@ -85,7 +85,7 @@ impl<T> fmt::Display for SendError<T> {
 
 impl<T> fmt::Debug for SendError<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "SendError<{}>(_)", stringify!(T))
+        write!(f, "SendError<{}>(_)", core::any::type_name::<T>())
     }
 }
 
