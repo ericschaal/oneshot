@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
   `"SendError<T>(_)"`.
 
 
+## [0.1.13] - 2026-01-26
+### Fixed
+- Fix documentation building on docs.rs by not using removed `doc_auto_cfg` feature.
+
+
 ## [0.1.12] - 2026-01-25
 ### Fixed
 - Fix race condition that could lead to use-after-free if the `Receiver` was polled asynchronously,
