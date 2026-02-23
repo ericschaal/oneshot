@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](http://semver.org/spec/v2.0.0.
 
 
 ## [Unreleased]
+
+
+## [0.2.0] - 2026-02-23
 ### Changed
 - Disable both the `std` and `async` features by default. Making them opt-in instead of opt-out.
   This makes the library more minimal by default and only contains the functionality that the
