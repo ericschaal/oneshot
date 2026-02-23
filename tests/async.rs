@@ -98,3 +98,21 @@ async fn poll_receiver_then_drop_it() {
     // Make sure the receiver has been dropped by the runtime.
     assert!(sender.send(()).is_err());
 }
+
+#[test]
+fn dropping_sender_disconnects_async_receiver() {
+    let (sender, receiver) = oneshot::async_channel::<()>();
+    assert!(!sender.is_closed());
+    assert!(!receiver.is_closed());
+    drop(sender);
+    assert!(receiver.is_closed());
+}
+
+#[test]
+fn async_receiver_has_message() {
+    let (sender, receiver) = oneshot::async_channel();
+    assert!(!receiver.has_message());
+    assert!(sender.send(19i128).is_ok());
+
+    assert!(receiver.has_message());
+}
